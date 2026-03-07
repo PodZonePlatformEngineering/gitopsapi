@@ -1,0 +1,27 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      # Git repo settings
+      GITOPS_REPO_URL: "${GITOPS_REPO_URL:-}"
+      GITOPS_BRANCH: "${GITOPS_BRANCH:-main}"
+      GITOPS_LOCAL_PATH: /tmp/gitops-repo
+      # GitHub API
+      GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
+      GITHUB_REPO: "${GITHUB_REPO:-motttt/cluster09}"
+      # Management cluster kubeconfig (base64-encoded YAML)
+      MGMT_KUBECONFIG_SECRET: "${MGMT_KUBECONFIG_SECRET:-}"
+      # SOPS age key
+      SOPS_AGE_KEY_SECRET: "${SOPS_AGE_KEY_SECRET:-}"
+      # Dev role bypass (local dev only — not for production)
+      GITOPSGUI_DEV_ROLE: "${GITOPSGUI_DEV_ROLE:-cluster_operator}"
+    volumes:
+      - gitops-repo:/tmp/gitops-repo
+      - ./src:/app/src   # hot-reload Python source in dev
+
+volumes:
+  gitops-repo:
