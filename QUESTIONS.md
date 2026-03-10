@@ -22,24 +22,27 @@
 
 ## Active Questions
 
-## [TASK-029] GitOpsAPI Helm Chart — Harbor Push Required
+## [TASK-029] GitOpsAPI Helm Chart — Harbor Push (Manual Upload Required)
 
-**Status**: Acknowledged by Trismagistus (2026-03-10 23:20 GMT)
+**Status**: Blocked — Helm chart API push failing, needs manual UI upload (2026-03-10 23:30 GMT)
 
-**Action needed**:
+**Progress**:
+- ✅ Harbor containers restarted on VM 1000 (192.168.4.100)
+- ✅ Harbor project `gitopsapi` created (project_id: 9)
+- ✅ Chart copied to freyr: `/tmp/gitopsapi-0.1.0.tgz`
+- ❌ Helm chart push via API/cm-push failing (chartrepo endpoint errors)
 
-1. Create harbor project `gitopsapi` at Harbor (192.168.4.100)
-2. Push packaged chart: `/tmp/gitopsapi-0.1.0.tgz`
+**Workaround needed (Martin)**:
+Manual upload via Harbor UI:
+1. Login: http://192.168.4.100 (admin / Harbor12345)
+2. Navigate: Library → gitopsapi project
+3. Upload Chart button → select `/tmp/gitopsapi-0.1.0.tgz` (from freyr or local copy)
 
-**Note from Trismagistus**: 
-- Chart copied to freyr: `/tmp/gitopsapi-0.1.0.tgz`
-- Attempted Harbor API access (http://192.168.4.100/api/v2.0/projects) - no response
-- Need from Martin:
-  - Confirm Harbor is running on 192.168.4.100
-  - Provide Harbor credentials (admin password?)
-  - Or push chart manually via Harbor UI: Library → New Project → gitopsapi → Upload Chart
+**Documentation created**: 
+- `podzoneAgentTeam/infrastructure/harbor-docker-restart.md` — Harbor container management procedures
+- **TASK-051** proposed: Automate Harbor restart on hypervisor boot (future infrastructure agent)
 
-**Context**: Chart is built and linted. Claude Code does not have direct access to harbor. Harbor push is a Trismagistus responsibility going forward. Chart source: `gitopsapi/charts/gitopsapi/` v0.1.0.
+**Context**: Chart is built and linted. Harbor chartrepo API endpoint not functioning properly in Harbor v2.14.0. Chart source: `gitopsapi/charts/gitopsapi/` v0.1.0.
 
 ---
 
