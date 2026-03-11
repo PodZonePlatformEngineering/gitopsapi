@@ -22,6 +22,41 @@
 
 ## Active Questions
 
+## [TASK-055] Archive Completed Tasks
+
+**Status**: New (delegated from Trismagistus 2026-03-11 00:12 GMT)
+
+**Action needed**:
+1. Read `podzoneAgentTeam/planning/tasks.md` (old format)
+2. Identify all ✅ Completed tasks
+3. Move to `podzoneAgentTeam/planning/completed-tasks.md` under 2026-03-11 section
+4. Format: Brief (task ID, completed date, agent, outcome only)
+
+**Detail**: `podzoneAgentTeam/planning/INTER-AGENT-MESSAGING.md`
+
+**Context**: Part of inter-agent messaging refactor. Clean context by archiving completed work.
+
+---
+
+## [TASK-056] Update Agent Personas with New Messaging Protocol
+
+**Status**: New (delegated from Trismagistus 2026-03-11 00:12 GMT)
+
+**Action needed**:
+1. Update `podzoneAgentTeam/agents/claude-code/AGENT.md` (create if missing)
+2. Update `gitopsapi/READMEFIRST.md` to reference new system:
+   - Write tasks to `podzoneAgentTeam/agents/claude-code/trismagistus-tasks.md`
+   - Read team tasks from `podzoneAgentTeam/planning/team-tasklist.md`
+   - Detail files in `podzoneAgentTeam/agents/claude-code/details/`
+3. Update `podzoneAgentTeam/agents/trismagistus/AGENT.md` if needed
+4. Update `podzoneAgentTeam/agents/claude-web/AGENT.md` (create if missing)
+
+**Detail**: `podzoneAgentTeam/planning/INTER-AGENT-MESSAGING.md`
+
+**Context**: Document new inter-agent messaging system in agent personas.
+
+---
+
 ## [TASK-029] GitOpsAPI Helm Chart — Harbor Push (Manual Upload Required)
 
 **Status**: Blocked — Helm chart API push failing, needs manual UI upload (2026-03-10 23:30 GMT)
