@@ -85,9 +85,10 @@
 
 **Workaround needed (Martin)**:
 Manual upload via Harbor UI:
-1. Login: http://192.168.4.100 (admin / Harbor12345)
-2. Navigate: Library → gitopsapi project
-3. Upload Chart button → select `/tmp/gitopsapi-0.1.0.tgz` (from freyr or local copy)
+1. SSH to freyr (192.168.1.80), Harbor port-forwarded to localhost:8080
+2. Login: http://localhost:8080 (admin / Harbor12345) OR http://192.168.4.100 from 192.168.4.0 network
+3. Navigate: Library → gitopsapi project
+4. Upload Chart button → select `/tmp/gitopsapi-0.1.0.tgz`
 
 **Documentation created**: 
 - `podzoneAgentTeam/infrastructure/harbor-docker-restart.md` — Harbor container management procedures
