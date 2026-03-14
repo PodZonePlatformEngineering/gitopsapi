@@ -1,0 +1,30 @@
+image:
+  repository: harbor.podzone.cloud/gitopsapi/gitopsapi
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+gitops:
+  repoUrl: ""
+  branch: main
+  githubRepo: ""
+  localPath: /tmp/gitops-repo
+
+secrets:
+  sshKeySecret: gitopsapi-ssh-key
+  githubTokenSecret: gitopsapi-github-token
+  mgmtKubeconfigSecret: gitopsapi-mgmt-kubeconfig
+  ageKeySecret: gitopsapi-age-key
+
+expose:
+  hostname: gitopsgui.podzone.cloud
+  gatewayName: gateway
+  gatewayNamespace: kube-system
+  tlsSecretName: gitopsgui-tls
+
+resources:
+  requests:
+    cpu: "250m"
+    memory: "512Mi"
+  limits:
+    cpu: "1000m"
+    memory: "1Gi"

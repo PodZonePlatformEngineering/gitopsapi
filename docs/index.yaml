@@ -3,7 +3,18 @@ entries:
   gitopsapi:
   - apiVersion: v2
     appVersion: latest
-    created: "2026-03-11T17:40:09.11415Z"
+    created: "2026-03-14T07:58:36.501256Z"
+    description: GitOpsAPI — GitOps management API with React frontend (clusters,
+      applications, change pipelines, PR governance)
+    digest: 1c934741849d8213b4aa92cc7a809d0fda17dfc8f32d567e28ae0e6d76682b3a
+    name: gitopsapi
+    type: application
+    urls:
+    - https://motttt.github.io/gitopsapi/gitopsapi-0.1.1.tgz
+    version: 0.1.1
+  - apiVersion: v2
+    appVersion: latest
+    created: "2026-03-14T07:58:36.4992Z"
     description: GitOpsAPI — GitOps management API with React frontend (clusters,
       applications, change pipelines, PR governance)
     digest: 3dd629d4a13331fd8f1c06eebf33dc8db199486b8058af164f75799c46f7e42b
@@ -12,4 +23,4 @@ entries:
     urls:
     - https://motttt.github.io/gitopsapi/gitopsapi-0.1.0.tgz
     version: 0.1.0
-generated: "2026-03-11T17:40:09.113857Z"
+generated: "2026-03-14T07:58:36.498673Z"

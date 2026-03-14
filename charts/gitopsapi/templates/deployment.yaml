@@ -33,7 +33,7 @@ spec:
             - name: GITHUB_REPO
               value: {{ .Values.gitops.githubRepo | quote }}
             - name: GITOPS_LOCAL_PATH
-              value: {{ .Values.gitops.localPath | quote }}
+              value: {{ .Values.gitops.localPath | default "/tmp/gitops-repo" | quote }}
             - name: GITOPS_SSH_KEY_PATH
               value: /etc/gitops-ssh/id_rsa
             - name: GITHUB_TOKEN
