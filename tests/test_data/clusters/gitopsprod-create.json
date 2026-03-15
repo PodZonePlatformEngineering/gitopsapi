@@ -1,0 +1,18 @@
+{
+  "_comment": "POST /api/v1/clusters — provision gitopsprod cluster",
+  "_curl": "curl -s -X POST -H 'Host: gitopsgui.podzone.cloud' -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @clusters/gitopsprod-create.json http://freyr:8081/api/v1/clusters",
+  "name": "gitopsprod",
+  "platform": "proxmox",
+  "vip": "192.168.4.140",
+  "ip_range": "192.168.4.141-192.168.4.147",
+  "dimensions": {
+    "control_plane_count": 1,
+    "worker_count": 1,
+    "cpu_per_node": 4,
+    "memory_gb_per_node": 16,
+    "boot_volume_gb": 50
+  },
+  "gitops_repo_url": "git@github.com:MoTTTT/cluster09.git",
+  "sops_secret_ref": "gitopsapi-age-key",
+  "bastion": null
+}

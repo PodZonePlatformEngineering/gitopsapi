@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - gitopsapi.yaml
+configMapGenerator:
+  - name: gitopsapi-values
+    namespace: flux-system
+    files:
+      - values.yaml=gitopsapi-values.yaml
+configurations:
+  - kustomizeconfig.yaml

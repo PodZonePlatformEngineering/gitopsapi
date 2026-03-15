@@ -1,0 +1,9 @@
+{
+  "_comment": "POST /api/v1/pipelines/gitopsapi-v0.1.0/changes — record application change linked to this pipeline",
+  "_curl": "curl -s -X POST -H 'Host: gitopsgui.podzone.cloud' -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: build-managers' -d @pipelines/gitopsapi-v0.1.0-change.json http://freyr:8081/api/v1/pipelines/gitopsapi-v0.1.0/changes",
+  "change_request_id": "CHG0000001",
+  "change_name": "Initial GitOpsAPI release",
+  "description": "First production release of GitOpsAPI v0.1.0. Implements cluster, application, pipeline, PR, and status endpoints. Deployed via GitHub Pages Helm chart.",
+  "app_id": "gitopsapi",
+  "app_branch": "main"
+}

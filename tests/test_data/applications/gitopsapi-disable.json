@@ -1,0 +1,5 @@
+{
+  "_comment": "POST /api/v1/applications/gitopsapi/disable — disable gitopsapi on gitopsdev (comments out Kustomization)",
+  "_curl": "curl -s -X POST -H 'Host: gitopsgui.podzone.cloud' -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @applications/gitopsapi-disable.json http://freyr:8081/api/v1/applications/gitopsapi/disable",
+  "cluster": "gitopsdev"
+}

@@ -1,0 +1,11 @@
+{
+  "_comment": "POST /api/v1/pipelines — create change pipeline for gitopsapi v0.1.0",
+  "_curl": "curl -s -X POST -H 'Host: gitopsgui.podzone.cloud' -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: build-managers' -d @pipelines/gitopsapi-v0.1.0-create.json http://freyr:8081/api/v1/pipelines",
+  "name": "gitopsapi-v0.1.0",
+  "dev_cluster_id": "gitopsdev",
+  "ete_cluster_id": "gitopsete",
+  "prod_cluster_id": "gitopsprod",
+  "app_id": "gitopsapi",
+  "chart_version": "0.1.0",
+  "release_id": "gitopsapi-0.1.0-20260311"
+}
