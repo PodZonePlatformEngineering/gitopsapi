@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 
-from .routers import clusters, applications, application_configs, pipelines, prs, status
+from .routers import clusters, applications, application_configs, pipelines, prs, repositories, status
 
 # Set to True once startup tasks (git init, kubeconfig) complete successfully.
 _ready = False
@@ -44,6 +44,7 @@ app.include_router(applications.router, prefix="/api/v1")
 app.include_router(application_configs.router, prefix="/api/v1")
 app.include_router(pipelines.router, prefix="/api/v1")
 app.include_router(prs.router, prefix="/api/v1")
+app.include_router(repositories.router, prefix="/api/v1")
 app.include_router(status.router, prefix="/api/v1")
 
 

@@ -3,8 +3,10 @@ from fastapi.responses import Response
 from typing import List
 
 from ...models.cluster import ClusterSpec, ClusterResponse
+from ...models.sops import SOPSBootstrapRequest, SOPSBootstrapResponse
 from ...services.cluster_service import ClusterService
 from ...services.kubeconfig_service import KubeconfigService
+from ...services.sops_service import SOPSService
 from ..auth import require_role
 
 router = APIRouter(tags=["clusters"])
@@ -56,3 +58,27 @@ async def get_kubeconfig(name: str, caller=require_role("cluster_operator", "bui
         media_type="application/x-yaml",
         headers={"Content-Disposition": f'attachment; filename="{name}-kubeconfig.yaml"'},
     )
+
+
+@router.post(
+    "/clusters/{name}/sops-bootstrap",
+    response_model=SOPSBootstrapResponse,
+    status_code=201,
+    summary="Bootstrap SOPS key lifecycle for a cluster (TR-SOPS-002)",
+)
+async def sops_bootstrap(
+    name: str,
+    request: SOPSBootstrapRequest,
+    _=require_role("cluster_operator"),
+):
+    """Generate a SOPS age key for the cluster, encrypt it with the management cluster key,
+    commit the encrypted key to management-infra, install the private key as a K8s Secret
+    in flux-system, and write .sops.yaml to the cluster-infra repo.
+    """
+    svc = SOPSService()
+    try:
+        return await svc.sops_bootstrap(name, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
