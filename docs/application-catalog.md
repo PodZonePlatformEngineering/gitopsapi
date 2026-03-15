@@ -307,6 +307,29 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 
 ---
 
+---
+
+### docker-build-agent
+
+**Description**: Docker image build agent — runs containerised Docker builds for gitopsapi and platform images. Deployed on `erectus` (192.168.1.201), the dedicated Docker host. Builds are triggered via rsync + remote docker build; images pushed to GHCR and/or Harbor.
+**GitHub**: ⚠️ RECOMMENDED: evaluate Forgejo Actions runner or self-hosted GitHub Actions runner for CI/CD integration
+**Web**: ⚠️ RECOMMENDED: confirm agent type (GitHub Actions runner, Forgejo runner, custom)
+**Category**: CI/CD, Platform Infrastructure
+**Activity**: 1 host (erectus 192.168.1.201 — manual trigger, rsync workflow)
+
+| Field | Value |
+|---|---|
+| name | docker-build-agent |
+| helmRepo | ⚠️ RECOMMENDED: [Forgejo runner](https://forgejo.org/docs/latest/admin/actions/) or [actions-runner-controller](https://github.com/actions/actions-runner-controller) (GitHub ARC) |
+| chart | ⚠️ RECOMMENDED: actions-runner-controller or forgejo-runner |
+| chartVersion | ⚠️ RECOMMENDED: confirm on adoption |
+| namespace | build-system |
+| applicationRepo | ⚠️ RECOMMENDED: internal (co-located with Forgejo when TASK-039 lands) |
+
+**Note**: Currently manual — `rsync src/ → erectus:~/gitopsapi-build/src/` then `docker build` on erectus. Formalising this as a managed application unblocks automated CI: image builds on every merge to main. Depends on Forgejo (TASK-039) for a fully automated pipeline.
+
+---
+
 ## Planned Applications
 
 ### forgejo
@@ -464,6 +487,7 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 | piraeus affinity-ctrl | Platform Infra | Deployed | cluster09 |
 | cluster09-docs | Documentation | Deployed | cluster09 |
 | podzone-docs | Documentation | Deployed | cluster09 |
+| docker-build-agent | CI/CD | Active (manual, erectus) | erectus host |
 | forgejo | Source Control | Planned (TASK-039) | — |
 | cloudnativepg | Data | Planned (TASK-041) | — |
 | nexus | Artifact Mgmt | Proposed | — |
