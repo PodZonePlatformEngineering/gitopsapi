@@ -299,5 +299,71 @@ async def main() -> None:
         await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
+# ---------------------------------------------------------------------------
+# SSE transport (for remote/server deployment)
+# ---------------------------------------------------------------------------
+
+def _run_sse(port: int) -> None:
+    """Run the MCP server with SSE transport, suitable for cluster deployment."""
+    import uvicorn
+    from mcp.server.sse import SseServerTransport
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import Response
+    from starlette.routing import Mount, Route
+
+    auth_token = os.environ.get("MCP_AUTH_TOKEN")
+
+    sse_transport = SseServerTransport("/messages")
+
+    async def handle_sse(request: Request) -> Response:
+        if auth_token:
+            provided = request.headers.get("Authorization", "")
+            if provided != f"Bearer {auth_token}":
+                return Response("Unauthorized", status_code=401)
+        async with sse_transport.connect_sse(
+            request.scope, request.receive, request._send
+        ) as streams:
+            await server.run(streams[0], streams[1], server.create_initialization_options())
+        return Response()
+
+    async def healthz(request: Request) -> Response:
+        return Response("ok", status_code=200)
+
+    starlette_app = Starlette(
+        routes=[
+            Route("/healthz", endpoint=healthz, methods=["GET"]),
+            Route("/sse", endpoint=handle_sse, methods=["GET"]),
+            Mount("/messages", app=sse_transport.handle_post_message),
+        ]
+    )
+
+    uvicorn.run(starlette_app, host="0.0.0.0", port=port)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    import argparse
+
+    parser = argparse.ArgumentParser(description="GitOpsGUI context MCP server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse"],
+        default=os.environ.get("MCP_TRANSPORT", "stdio"),
+        help="Transport mode: stdio (local) or sse (remote server). Default: stdio",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("MCP_PORT", "8080")),
+        help="Port for SSE transport (default: 8080)",
+    )
+    args = parser.parse_args()
+
+    if args.transport == "sse":
+        _run_sse(args.port)
+    else:
+        asyncio.run(main())
