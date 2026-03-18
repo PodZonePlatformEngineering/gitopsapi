@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from typing import List
 
-from ...models.cluster import ClusterSpec, ClusterResponse
+from ...models.cluster import ClusterSpec, ClusterResponse, ClusterSuspendResponse, ClusterDecommissionResponse
 from ...models.sops import SOPSBootstrapRequest, SOPSBootstrapResponse
 from ...services.cluster_service import ClusterService
 from ...services.kubeconfig_service import KubeconfigService
@@ -58,6 +58,44 @@ async def get_kubeconfig(name: str, caller=require_role("cluster_operator", "bui
         media_type="application/x-yaml",
         headers={"Content-Disposition": f'attachment; filename="{name}-kubeconfig.yaml"'},
     )
+
+
+@router.post(
+    "/clusters/{name}/suspend",
+    response_model=ClusterSuspendResponse,
+    status_code=202,
+    summary="Suspend Flux reconciliation for a cluster without deleting resources",
+)
+async def suspend_cluster(
+    name: str,
+    _=require_role("cluster_operator"),
+):
+    """PR: sets spec.suspend: true on the cluster's Kustomization in ManagementCluster/clusters.yaml.
+    The cluster continues running; Flux stops reconciling. Reversible before decommission.
+    """
+    svc = ClusterService()
+    return await svc.suspend_cluster(name)
+
+
+@router.delete(
+    "/clusters/{name}",
+    response_model=ClusterDecommissionResponse,
+    status_code=202,
+    summary="Decommission a cluster: remove from git and archive repos",
+)
+async def decommission_cluster(
+    name: str,
+    _=require_role("cluster_operator"),
+):
+    """PR: removes cluster-chart files and the Kustomization entry from ManagementCluster/clusters.yaml.
+    On merge, Flux prunes the Kustomization → HelmRelease deleted → CAPI deprovisions machines.
+    The {name}-infra and {name}-apps repos are archived (read-only) before the PR is opened.
+    """
+    svc = ClusterService()
+    try:
+        return await svc.decommission_cluster(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post(

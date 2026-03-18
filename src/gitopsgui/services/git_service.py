@@ -80,7 +80,11 @@ class GitService:
     def _get_repo(self) -> git.Repo:
         """Lazily initialise and return the git.Repo instance."""
         if self._git_repo is None:
-            if not self._repo_url:
+            if not self._repo_url and not (
+                SKIP_INIT
+                and self._local_path.exists()
+                and (self._local_path / ".git").exists()
+            ):
                 raise RuntimeError(
                     "GitService not initialised: no repo_url configured. "
                     "Set GITOPS_REPO_URL or pass repo_url to the constructor."
@@ -153,6 +157,15 @@ class GitService:
                 **({"env": env} if env else {}),
             )
         await asyncio.to_thread(_run)
+
+    async def delete_file(self, path: str) -> None:
+        """Remove a file from the working tree and stage the deletion."""
+        full_path = self._local_path / path
+        if not full_path.exists():
+            raise FileNotFoundError(f"File not found in repo: {path}")
+        full_path.unlink()
+        repo = self._get_repo()
+        repo.index.remove([str(full_path.relative_to(self._local_path))])
 
     async def checkout_main(self) -> None:
         """Return to main and pull (call after PR is merged)."""

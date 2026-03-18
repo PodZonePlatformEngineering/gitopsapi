@@ -30,6 +30,17 @@ class ClusterSpec(BaseModel):
     allow_scheduling_on_control_planes: bool = False  # enables Talos allowSchedulingOnControlPlanes; required when worker_count=0
 
 
+class ClusterSuspendResponse(BaseModel):
+    name: str
+    pr_url: str
+
+
+class ClusterDecommissionResponse(BaseModel):
+    name: str
+    pr_url: str
+    archived_repos: List[str]
+
+
 class ClusterStatus(BaseModel):
     flux_status: Optional[str] = None
     k8s_version: Optional[str] = None

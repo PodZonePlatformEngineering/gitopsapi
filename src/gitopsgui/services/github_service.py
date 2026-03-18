@@ -373,6 +373,22 @@ class GitHubService:
             pr.merge(merge_method="squash")
         await asyncio.to_thread(_run)
 
+    async def archive_repo(self, repo_name: str) -> None:
+        """Mark owner/repo_name as archived (read-only). Preserves full history.
+
+        Idempotent: no-op if the repo is already archived.
+        """
+        if SKIP_GITHUB:
+            return
+
+        def _run():
+            gh = _client()
+            repo = gh.get_repo(f"{self._owner()}/{repo_name}")
+            if not repo.archived:
+                repo.edit(archived=True)
+
+        await asyncio.to_thread(_run)
+
     async def tag_deployment(self, commit_sha: str, tag: str) -> None:
         """Apply a lightweight git tag to the merge commit for deployment provenance."""
         if SKIP_GITHUB:

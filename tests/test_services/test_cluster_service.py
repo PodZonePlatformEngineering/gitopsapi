@@ -7,7 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from gitopsgui.models.cluster import ClusterSpec, ClusterDimensions
 from gitopsgui.services.cluster_service import (
-    ClusterService, _render_values, _render_kustomization, _render_cluster_yaml
+    ClusterService, _render_values, _render_kustomization, _render_cluster_yaml,
+    _set_kustomization_suspended, _remove_kustomization,
 )
 
 
@@ -174,3 +175,108 @@ async def test_create_cluster_pr_labels_include_cluster_and_stage():
     labels = call_kwargs.kwargs.get("labels") or call_kwargs.args[3]
     assert "cluster" in labels
     assert "stage:production" in labels
+
+
+# ---------------------------------------------------------------------------
+# clusters.yaml helpers
+# ---------------------------------------------------------------------------
+
+_CLUSTERS_YAML = """\
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: testcluster-cluster
+  namespace: flux-system
+spec:
+  interval: 10m
+  path: ./gitops/cluster-charts/testcluster
+  prune: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: other-cluster
+  namespace: flux-system
+spec:
+  interval: 10m
+  path: ./gitops/cluster-charts/other
+  prune: true
+"""
+
+
+def test_set_kustomization_suspended_adds_suspend():
+    result = _set_kustomization_suspended(_CLUSTERS_YAML, "testcluster")
+    assert "suspend: true" in result
+    # Only patched the target — other cluster unaffected
+    other_idx = result.index("name: other-cluster")
+    other_block = result[other_idx:]
+    assert "suspend: true" not in other_block
+
+
+def test_set_kustomization_suspended_noop_on_unknown():
+    result = _set_kustomization_suspended(_CLUSTERS_YAML, "nonexistent")
+    assert result == _CLUSTERS_YAML
+
+
+def test_remove_kustomization_removes_target():
+    result = _remove_kustomization(_CLUSTERS_YAML, "testcluster")
+    assert "name: testcluster-cluster" not in result
+    assert "name: other-cluster" in result
+
+
+def test_remove_kustomization_noop_on_unknown():
+    result = _remove_kustomization(_CLUSTERS_YAML, "nonexistent")
+    assert result == _CLUSTERS_YAML
+
+
+# ---------------------------------------------------------------------------
+# suspend_cluster
+# ---------------------------------------------------------------------------
+
+async def test_suspend_cluster_creates_pr():
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.create_branch = AsyncMock()
+    svc._git.read_file = AsyncMock(return_value=_CLUSTERS_YAML)
+    svc._git.write_file = AsyncMock()
+    svc._git.commit = AsyncMock(return_value="sha")
+    svc._git.push = AsyncMock()
+    svc._gh = AsyncMock()
+    svc._gh.create_pr = AsyncMock(return_value="https://github.com/test/pr/10")
+
+    result = await svc.suspend_cluster("testcluster")
+
+    svc._git.write_file.assert_called_once()
+    written = svc._git.write_file.call_args.args[1]
+    assert "suspend: true" in written
+    assert result.pr_url == "https://github.com/test/pr/10"
+
+
+# ---------------------------------------------------------------------------
+# decommission_cluster
+# ---------------------------------------------------------------------------
+
+async def test_decommission_cluster_creates_pr_and_archives():
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.create_branch = AsyncMock()
+    svc._git.delete_file = AsyncMock()
+    svc._git.read_file = AsyncMock(return_value=_CLUSTERS_YAML)
+    svc._git.write_file = AsyncMock()
+    svc._git.commit = AsyncMock(return_value="sha")
+    svc._git.push = AsyncMock()
+    svc._gh = AsyncMock()
+    svc._gh.archive_repo = AsyncMock()
+    svc._gh.create_pr = AsyncMock(return_value="https://github.com/test/pr/11")
+
+    result = await svc.decommission_cluster("testcluster")
+
+    assert svc._git.delete_file.call_count == 4  # values + cluster.yaml + kustomization + kustomizeconfig
+    written_content = svc._git.write_file.call_args.args[1]
+    assert "name: testcluster-cluster" not in written_content
+    assert svc._gh.archive_repo.call_count == 2
+    archived_names = {c.args[0] for c in svc._gh.archive_repo.call_args_list}
+    assert archived_names == {"testcluster-infra", "testcluster-apps"}
+    assert result.archived_repos == ["testcluster-infra", "testcluster-apps"]
+    assert result.pr_url == "https://github.com/test/pr/11"

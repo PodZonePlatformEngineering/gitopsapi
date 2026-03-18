@@ -15,15 +15,47 @@ from typing import List, Optional
 
 import yaml
 
-from ..models.cluster import ClusterSpec, ClusterResponse, ClusterStatus
+from ..models.cluster import (
+    ClusterSpec, ClusterResponse, ClusterStatus,
+    ClusterSuspendResponse, ClusterDecommissionResponse,
+)
 from .git_service import GitService
 from .github_service import GitHubService
 
 _CLUSTER_CHARTS_BASE = "gitops/cluster-charts"
 _CLUSTERS_BASE = "clusters"
+_MGMT_CLUSTERS_PATH = "clusters/ManagementCluster/clusters.yaml"
 
 # Reviewers determined by target (cluster changes always need cluster_operator approval)
 _CLUSTER_REVIEWERS: List[str] = []  # populated from env/config at runtime
+_CLUSTER_STAGE_LABEL = "stage:production"
+
+
+# ---------------------------------------------------------------------------
+# clusters.yaml helpers
+# ---------------------------------------------------------------------------
+
+def _set_kustomization_suspended(content: str, cluster_name: str) -> str:
+    """Insert suspend: true into the named Kustomization's spec block."""
+    kust_name = f"{cluster_name}-cluster"
+    parts = content.split("\n---")
+    result = []
+    for part in parts:
+        if f"name: {kust_name}" in part and "kind: Kustomization" in part:
+            part = part.replace("spec:\n", "spec:\n  suspend: true\n", 1)
+        result.append(part)
+    return "\n---".join(result)
+
+
+def _remove_kustomization(content: str, cluster_name: str) -> str:
+    """Remove the YAML document for cluster_name-cluster from a multi-doc file."""
+    kust_name = f"{cluster_name}-cluster"
+    parts = content.split("\n---")
+    kept = [
+        p for p in parts
+        if not (f"name: {kust_name}" in p and "kind: Kustomization" in p)
+    ]
+    return "\n---".join(kept)
 
 
 def _cluster_values_path(name: str) -> str:
@@ -236,7 +268,7 @@ class ClusterService:
             branch=branch,
             title=f"Provision cluster: {spec.name}",
             body=pr_body,
-            labels=["cluster", "stage:production"],
+            labels=["cluster", _CLUSTER_STAGE_LABEL],
             reviewers=_CLUSTER_REVIEWERS,
         )
 
@@ -254,8 +286,93 @@ class ClusterService:
             branch=branch,
             title=f"Update cluster: {name}",
             body=f"Cluster spec update for `{name}`.",
-            labels=["cluster", "stage:production"],
+            labels=["cluster", _CLUSTER_STAGE_LABEL],
             reviewers=_CLUSTER_REVIEWERS,
         )
 
         return ClusterResponse(name=name, spec=spec, pr_url=pr_url)
+
+    async def suspend_cluster(self, name: str) -> ClusterSuspendResponse:
+        """PR: add suspend: true to the cluster's Kustomization in ManagementCluster/clusters.yaml.
+
+        When Flux reconciles the PR, it suspends the cluster's HelmRelease reconciliation
+        without deleting any resources. The cluster continues to run unmanaged.
+        """
+        branch = f"cluster/suspend-{name}-{uuid.uuid4().hex[:8]}"
+        await self._git.create_branch(branch)
+
+        content = await self._git.read_file(_MGMT_CLUSTERS_PATH)
+        updated = _set_kustomization_suspended(content, name)
+        await self._git.write_file(_MGMT_CLUSTERS_PATH, updated)
+        await self._git.commit(f"chore: suspend cluster {name}")
+        await self._git.push()
+
+        pr_url = await self._gh.create_pr(
+            branch=branch,
+            title=f"Suspend cluster: {name}",
+            body=(
+                f"Sets `spec.suspend: true` on the `{name}-cluster` Kustomization.\n\n"
+                f"The cluster continues to run but Flux stops reconciling its HelmRelease.\n"
+                f"Reverse with a follow-up PR removing the suspend flag, or proceed to "
+                f"`DELETE /clusters/{name}` to decommission."
+            ),
+            labels=["cluster", _CLUSTER_STAGE_LABEL],
+            reviewers=_CLUSTER_REVIEWERS,
+        )
+
+        return ClusterSuspendResponse(name=name, pr_url=pr_url)
+
+    async def decommission_cluster(self, name: str) -> ClusterDecommissionResponse:
+        """PR: remove cluster-chart files + Kustomization entry. Archives infra/apps repos.
+
+        When the PR is merged, Flux prunes the {name}-cluster Kustomization which cascades to
+        deleting the HelmRelease → CAPI deprovisions all cluster machines.
+        Repos {name}-infra and {name}-apps are archived (read-only) before the PR is opened.
+        """
+        branch = f"cluster/decommission-{name}-{uuid.uuid4().hex[:8]}"
+        await self._git.create_branch(branch)
+
+        # Remove cluster-chart files
+        chart_files = [
+            f"{_CLUSTER_CHARTS_BASE}/{name}/{name}-values.yaml",
+            f"{_CLUSTER_CHARTS_BASE}/{name}/{name}.yaml",
+            f"{_CLUSTER_CHARTS_BASE}/{name}/kustomization.yaml",
+            f"{_CLUSTER_CHARTS_BASE}/{name}/kustomizeconfig.yaml",
+        ]
+        for path in chart_files:
+            try:
+                await self._git.delete_file(path)
+            except FileNotFoundError:
+                pass  # already absent — idempotent
+
+        # Remove the Kustomization entry from ManagementCluster/clusters.yaml
+        content = await self._git.read_file(_MGMT_CLUSTERS_PATH)
+        updated = _remove_kustomization(content, name)
+        await self._git.write_file(_MGMT_CLUSTERS_PATH, updated)
+
+        await self._git.commit(f"chore: decommission cluster {name}")
+        await self._git.push()
+
+        # Archive repos (read-only, history preserved) before PR so the intent is clear
+        archived: List[str] = []
+        for repo_suffix in ("infra", "apps"):
+            repo_name = f"{name}-{repo_suffix}"
+            await self._gh.archive_repo(repo_name)
+            archived.append(repo_name)
+
+        pr_url = await self._gh.create_pr(
+            branch=branch,
+            title=f"Decommission cluster: {name}",
+            body=(
+                f"Removes `{name}` cluster-chart files and its Kustomization entry from "
+                f"`clusters/ManagementCluster/clusters.yaml`.\n\n"
+                f"**Effect on merge**: Flux prunes the `{name}-cluster` Kustomization → "
+                f"HelmRelease deleted → CAPI deprovisions all `{name}` machines.\n\n"
+                f"**Repos archived** (read-only):\n"
+                + "".join(f"- `{r}`\n" for r in archived)
+            ),
+            labels=["cluster", _CLUSTER_STAGE_LABEL],
+            reviewers=_CLUSTER_REVIEWERS,
+        )
+
+        return ClusterDecommissionResponse(name=name, pr_url=pr_url, archived_repos=archived)
