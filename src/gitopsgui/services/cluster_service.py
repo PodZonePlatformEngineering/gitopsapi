@@ -43,27 +43,41 @@ def _kustomizeconfig_path(name: str) -> str:
 
 
 def _render_values(spec: ClusterSpec) -> str:
-    # Top-level keys are GitOpsAPI object store fields (roundtrip fidelity).
-    # Nested keys are cluster-chart Helm values (controlplane, worker, network, cluster).
-    data = {
-        "platform": spec.platform,
-        "vip": spec.vip,
-        "gitops_repo_url": spec.gitops_repo_url,
-        "sops_secret_ref": spec.sops_secret_ref,
-        "dimensions": {
-            "control_plane_count": spec.dimensions.control_plane_count,
-            "worker_count": spec.dimensions.worker_count,
-            "cpu_per_node": spec.dimensions.cpu_per_node,
-            "memory_gb_per_node": spec.dimensions.memory_gb_per_node,
-            "boot_volume_gb": spec.dimensions.boot_volume_gb,
-        },
+    """Render cluster-chart values YAML.
+
+    Matches the schema used by actual cluster-chart values files:
+      cluster.name, network.ip_ranges, controlplane.*, worker.machine_count
+    Top-level GitOpsAPI metadata fields (platform, vip, etc.) are also stored
+    here for roundtrip fidelity when the API reads back a cluster spec.
+    """
+    # cluster-chart consumed fields
+    data: dict = {
         "cluster": {"name": spec.name},
+        "network": {"ip_ranges": [spec.ip_range]},
         "controlplane": {
             "endpoint_ip": spec.vip,
             "machine_count": spec.dimensions.control_plane_count,
         },
         "worker": {"machine_count": spec.dimensions.worker_count},
-        "network": {"ip_ranges": [spec.ip_range]},
+    }
+    if spec.extra_manifests:
+        data["controlplane"]["extra_manifests"] = spec.extra_manifests
+    if spec.allow_scheduling_on_control_planes:
+        data["controlplane"]["allow_scheduling_on_control_planes"] = True
+
+    # GitOpsAPI metadata (roundtrip fields — not consumed by cluster-chart)
+    data["platform"] = spec.platform
+    data["vip"] = spec.vip
+    if spec.gitops_repo_url:
+        data["gitops_repo_url"] = spec.gitops_repo_url
+    data["sops_secret_ref"] = spec.sops_secret_ref
+    data["allow_scheduling_on_control_planes"] = spec.allow_scheduling_on_control_planes
+    data["dimensions"] = {
+        "control_plane_count": spec.dimensions.control_plane_count,
+        "worker_count": spec.dimensions.worker_count,
+        "cpu_per_node": spec.dimensions.cpu_per_node,
+        "memory_gb_per_node": spec.dimensions.memory_gb_per_node,
+        "boot_volume_gb": spec.dimensions.boot_volume_gb,
     }
     return yaml.dump(data, default_flow_style=False)
 
@@ -97,7 +111,7 @@ def _render_cluster_yaml(name: str) -> str:
               sourceRef:
                 kind: HelmRepository
                 name: podzone-charts
-              version: 0.1.19
+              version: 0.1.20
           valuesFrom:
             - kind: ConfigMap
               name: {name}-values
@@ -109,11 +123,12 @@ def _render_kustomization(name: str) -> str:
     return textwrap.dedent(f"""\
         apiVersion: kustomize.config.k8s.io/v1beta1
         kind: Kustomization
+        namespace: {name}
         resources:
           - {name}.yaml
+          - proxmox-secret.yaml
         configMapGenerator:
           - name: {name}-values
-            namespace: flux-system
             files:
               - values.yaml={name}-values.yaml
         configurations:
@@ -160,6 +175,7 @@ class ClusterService:
             dimensions=data.get("dimensions", {}),
             gitops_repo_url=data.get("gitops_repo_url", ""),
             sops_secret_ref=data.get("sops_secret_ref", ""),
+            allow_scheduling_on_control_planes=data.get("allow_scheduling_on_control_planes", False),
         )
         return ClusterResponse(name=name, spec=spec)
 

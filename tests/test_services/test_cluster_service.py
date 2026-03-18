@@ -33,10 +33,72 @@ def test_render_values_contains_name():
     assert "192.168.1.100" in out
 
 
+def test_render_values_cluster_chart_fields():
+    """cluster/network/controlplane/worker keys must be present for cluster-chart consumption."""
+    out = _render_values(_SPEC)
+    assert "cluster:" in out
+    assert "network:" in out
+    assert "controlplane:" in out
+    assert "worker:" in out
+    assert "ip_ranges:" in out
+    assert "endpoint_ip:" in out
+
+
+def test_render_values_extra_manifests_included():
+    spec = _SPEC.model_copy(update={"extra_manifests": [
+        "http://192.168.4.1/cilium.yaml",
+        "http://192.168.4.1/flux.yaml",
+    ]})
+    out = _render_values(spec)
+    assert "extra_manifests" in out
+    assert "cilium.yaml" in out
+
+
+def test_render_values_no_extra_manifests_omitted():
+    out = _render_values(_SPEC)
+    assert "extra_manifests" not in out
+
+
+def test_render_values_allow_scheduling_default_omitted():
+    out = _render_values(_SPEC)
+    # False is stored as roundtrip field but controlplane key must not appear
+    assert "allow_scheduling_on_control_planes: true" not in out
+
+
+def test_render_values_allow_scheduling_when_enabled():
+    spec = _SPEC.model_copy(update={"allow_scheduling_on_control_planes": True})
+    out = _render_values(spec)
+    assert "allow_scheduling_on_control_planes: true" in out
+
+
+def test_render_values_worker_count_zero_preserved():
+    spec = _SPEC.model_copy(update={
+        "allow_scheduling_on_control_planes": True,
+        "dimensions": ClusterDimensions(control_plane_count=1, worker_count=0),
+    })
+    out = _render_values(spec)
+    assert "worker_count: 0" in out
+
+
 def test_render_kustomization_references_name():
     out = _render_kustomization("my-cluster")
     assert "my-cluster.yaml" in out
     assert "my-cluster-values" in out
+
+
+def test_render_kustomization_includes_namespace():
+    out = _render_kustomization("my-cluster")
+    assert "namespace: my-cluster" in out
+
+
+def test_render_kustomization_includes_proxmox_secret():
+    out = _render_kustomization("my-cluster")
+    assert "proxmox-secret.yaml" in out
+
+
+def test_render_kustomization_no_flux_system_namespace_in_configmap():
+    out = _render_kustomization("my-cluster")
+    assert "namespace: flux-system" not in out
 
 
 def test_render_cluster_yaml_contains_helmrelease():
