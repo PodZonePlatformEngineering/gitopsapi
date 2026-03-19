@@ -22,10 +22,11 @@ async def lifespan(app: FastAPI):
         kubeconfig_path.write_text(mgmt_kubeconfig)
         kubeconfig_path.chmod(0o600)
 
-    # Initialise git repo clone on startup.
-    from ..services.git_service import GitService
-    git = GitService()
-    await git.init()
+    # Initialise git repo clone on startup — only when a writable repo is configured.
+    from ..services.git_service import GitService, REPO_URL
+    if REPO_URL:
+        git = GitService()
+        await git.init()
 
     _ready = True
     yield

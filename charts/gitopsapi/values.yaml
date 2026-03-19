@@ -19,10 +19,10 @@ secrets:
   ageKeySecret: gitopsapi-age-key
 
 expose:
-  hostname: gitopsgui.podzone.cloud
+  hostname: ""
   gatewayName: gateway
   gatewayNamespace: kube-system
-  tlsSecretName: gitopsgui-tls
+  tlsSecretName: gitopsapi-tls
 
 resources:
   requests:

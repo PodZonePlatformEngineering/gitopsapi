@@ -43,16 +43,19 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.githubTokenSecret }}
                   key: token
+                  optional: true
             - name: MGMT_KUBECONFIG_SECRET
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secrets.mgmtKubeconfigSecret }}
                   key: kubeconfig
+                  optional: true
             - name: SOPS_AGE_KEY_SECRET
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secrets.ageKeySecret }}
                   key: key.txt
+                  optional: true
           volumeMounts:
             - name: gitops-repo
               mountPath: /tmp/gitops-repo
