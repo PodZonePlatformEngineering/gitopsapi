@@ -38,6 +38,31 @@
 
 ## Active Questions
 
+## [CC-078] Deployment status — manual action required (2026-03-19)
+
+**Status**: Blocked on ghcr.io package visibility
+
+**Work completed this session**:
+
+- `git_service.py` + `repo_router.py`: HTTPS+PAT auth (SSH removed)
+- Helm chart 0.1.3: ssh-key volume removed, image v0.1.6, published to GitHub Pages Helm repo
+- `cluster09` + `gitopsdev-apps` updated: chart 0.1.3, image v0.1.6, HTTPS repoUrl, no sshKeySecret
+- 4 secrets recreated on gitopsdev: `ghcr-pull-secret`, `gitopsapi-github-token`, `gitopsapi-mgmt-kubeconfig`, `gitopsapi-age-key`
+- Image `ghcr.io/motttt/gitopsapi:v0.1.6` built and pushed to ghcr.io from erectus
+
+**Blocker**: The PAT in `flux-secret.yaml` has `packages:write` but NOT `packages:read`. Kubernetes nodes cannot pull the private image. The `ghcr-pull-secret` auth fails on image pull.
+
+**Action required** (cannot be done without packages scope):
+
+Make `ghcr.io/motttt/gitopsapi` package **public**:
+
+1. Go to <https://github.com/MoTTTT?tab=packages>
+2. Click `gitopsapi` → Package Settings → Change visibility → **Public**
+
+Once public, the HelmRelease will reconcile automatically (retrigger with `flux reconcile hr gitopsapi -n flux-system` on gitopsdev if needed).
+
+---
+
 ## [PROJ-003/T-010+T-011] platform-services cluster — API-first test session complete (2026-03-18)
 
 **Status**: Complete — all 11 API calls succeeded on local dev server; test data files written
