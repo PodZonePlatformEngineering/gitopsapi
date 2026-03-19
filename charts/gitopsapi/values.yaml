@@ -4,6 +4,9 @@ image:
   pullPolicy: IfNotPresent
 
 gitops:
+  # Default read-only catalog repo — used when no repoUrl is configured.
+  # Override with your own private GitOps repo to enable cluster/app writes.
+  catalogRepoUrl: "https://github.com/MoTTTT/gitopsapi-apps.git"
   repoUrl: ""
   branch: main
   githubRepo: ""
