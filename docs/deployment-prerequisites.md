@@ -1,38 +1,22 @@
 # GitOpsAPI Deployment Prerequisites
 
-**Version**: V0.2.0
-**Updated**: 2026-03-12
+**Updated**: 2026-03-19
 
-This checklist must be completed before deploying or updating GitOpsAPI. The pod will fail to start if any of the required secrets are missing.
-
----
-
-## Required Kubernetes Secrets
-
-All secrets must be created in the `gitopsapi` namespace **before** the HelmRelease is applied.
-
-### 1. `gitopsapi-ssh-key` — Git repository SSH key
-
-**Purpose**: Authenticates GitOpsAPI to the GitOps repository (`cluster09` or per-cluster repos) for all read/write operations.
-**Blocks pod start**: Yes — mounted as a volume; pod will not start if missing.
-
-```bash
-kubectl create secret generic gitopsapi-ssh-key \
-  --namespace gitopsapi \
-  --from-file=id_rsa=<path-to-private-key>
-```
-
-**Decision required**: Use a dedicated deploy key (recommended) or the shared git SSH key.
-
-- Dedicated deploy key: generate with `ssh-keygen -t ed25519 -f gitopsapi-deploy-key -C "gitopsapi@podzone"`, add the public key as a deploy key on the GitHub repo with write access.
-- Shared key: use the existing key from `~/.ssh/id_rsa` or equivalent.
+This checklist covers secrets and configuration required before deploying GitOpsAPI.
+Secrets are optional — the application starts without them and degrades gracefully:
+read-only catalog mode requires no secrets.
 
 ---
 
-### 2. `gitopsapi-github-token` — GitHub Personal Access Token
+## Secrets
 
-**Purpose**: Used by GitOpsAPI to create pull requests and manage branches on the GitOps repository via the GitHub API.
-**Required scope**: `repo` (full repository access on `MoTTTT/cluster09`, or the relevant per-cluster repo).
+All secrets must be created in the same namespace as the Helm release (default: `gitopsapi`).
+
+### 1. `gitopsapi-github-token` — GitHub Personal Access Token
+
+**Purpose**: Creates pull requests and manages branches on the GitOps repository via the GitHub API.
+**Required for**: Any write operation (cluster create/update, application assignment, pipeline create).
+**Required scope**: `repo` (full repository access on your management and per-cluster repos).
 
 ```bash
 kubectl create secret generic gitopsapi-github-token \
@@ -40,14 +24,15 @@ kubectl create secret generic gitopsapi-github-token \
   --from-literal=token=<github-pat>
 ```
 
-**Decision required**: Use an existing PAT or create a new one scoped to the GitOps repo only (recommended for least-privilege).
+Create a PAT at GitHub → Settings → Developer settings → Personal access tokens.
+Recommend a fine-grained token scoped to your GitOps organisation and repos.
 
 ---
 
-### 3. `gitopsapi-mgmt-kubeconfig` — Management cluster kubeconfig
+### 2. `gitopsapi-mgmt-kubeconfig` — Management cluster kubeconfig
 
-**Purpose**: Allows GitOpsAPI to connect to the Management cluster (CAPI controller) to query cluster status and extract per-cluster kubeconfigs.
-**Used for**: `KubeconfigService`, per-cluster K8s API access (V0.2.0 bootstrap).
+**Purpose**: Connects to the Management cluster (CAPI controller) to query cluster status and extract per-cluster kubeconfigs.
+**Required for**: `GET /api/v1/clusters` live status; per-cluster kubeconfig retrieval.
 
 ```bash
 kubectl create secret generic gitopsapi-mgmt-kubeconfig \
@@ -55,21 +40,21 @@ kubectl create secret generic gitopsapi-mgmt-kubeconfig \
   --from-file=kubeconfig=<path-to-mgmt-kubeconfig>
 ```
 
-To obtain the Management cluster kubeconfig:
+To obtain the kubeconfig from a CAPI-managed cluster:
 
 ```bash
-# From the Management cluster control plane node
-kubectl get secret <cluster-name>-kubeconfig -n default -o jsonpath='{.data.value}' | base64 -d > mgmt-kubeconfig
+kubectl get secret <cluster-name>-kubeconfig \
+  -n <capi-namespace> \
+  -o jsonpath='{.data.value}' | base64 -d > mgmt-kubeconfig
 ```
-
-Or copy from `~/.kube/config` if the management cluster context is already configured locally.
 
 ---
 
-### 4. `gitopsapi-age-key` — SOPS age private key
+### 3. `gitopsapi-age-key` — SOPS age private key
 
-**Purpose**: Used by GitOpsAPI to encrypt secrets (e.g. per-cluster kubeconfigs) before storing them in the GitOps repository.
-**Key file format**: age secret key file (begins with `# created: ...`, `# public key: ...`, `AGE-SECRET-KEY-...`).
+**Purpose**: Encrypts sensitive values (per-cluster kubeconfigs, credentials) before committing them to the GitOps repository.
+**Required for**: Cluster provisioning with SOPS-encrypted secrets; `sops_secret_ref` in `ClusterSpec`.
+**Key format**: age secret key file (begins with `# created: ...` / `AGE-SECRET-KEY-...`).
 
 ```bash
 kubectl create secret generic gitopsapi-age-key \
@@ -77,23 +62,20 @@ kubectl create secret generic gitopsapi-age-key \
   --from-file=key.txt=<path-to-age-key>
 ```
 
-**Decision required**: Use the existing key from `~/.config/sops/age/keys.txt`, or generate a new dedicated key:
+Generate a new age key:
 
 ```bash
 age-keygen -o gitopsapi-age-key.txt
-# Add the public key to .sops.yaml in the GitOps repo
+# Register the public key in .sops.yaml in your management GitOps repo
 ```
 
 ---
 
 ## Verification
 
-After creating all secrets, verify they exist before deploying:
-
 ```bash
 kubectl get secrets -n gitopsapi
-# Expected output includes:
-# gitopsapi-ssh-key
+# Should include whichever of these you have created:
 # gitopsapi-github-token
 # gitopsapi-mgmt-kubeconfig
 # gitopsapi-age-key
@@ -101,24 +83,48 @@ kubectl get secrets -n gitopsapi
 
 ---
 
-## Deployment
+## Helm Values
 
-Once secrets are in place, apply the HelmRelease:
+Configure the GitOps repository and GitHub organisation via Helm values:
 
-```bash
-# Via Flux (preferred) — commit HelmRelease to GitOps repo
-# or direct install for testing:
-helm install gitopsapi oci://ghcr.io/motttt/gitopsapi \
-  --namespace gitopsapi \
-  --create-namespace \
-  --version 0.2.0
+```yaml
+# my-values.yaml
+gitops:
+  catalogRepoUrl: "https://github.com/<your-org>/gitopsapi-apps.git"  # read-only catalog (default: MoTTTT/gitopsapi-apps)
+  repoUrl: "https://github.com/<your-org>/<your-mgmt-repo>.git"       # writable management repo
+  githubOrg: "<your-org>"
+  githubRepo: "<your-mgmt-repo>"
+  branch: main
+
+expose:
+  hostname: <your-hostname>
+  gatewayName: <gateway-name>
+  gatewayNamespace: <gateway-namespace>
+  tlsSecretName: <tls-secret-name>
 ```
 
-Or via the GitHub Pages Helm repository:
+Apply with:
+
+```bash
+helm upgrade --install gitopsapi gitopsapi/gitopsapi \
+  --namespace gitopsapi \
+  --create-namespace \
+  --values my-values.yaml
+```
+
+---
+
+## Deployment
+
+Install from GitHub Pages Helm repository:
 
 ```bash
 helm repo add gitopsapi https://motttt.github.io/gitopsapi
-helm install gitopsapi gitopsapi/gitopsapi --namespace gitopsapi --create-namespace
+helm repo update
+helm install gitopsapi gitopsapi/gitopsapi \
+  --namespace gitopsapi \
+  --create-namespace \
+  --values my-values.yaml
 ```
 
 ---
@@ -129,27 +135,29 @@ helm install gitopsapi gitopsapi/gitopsapi --namespace gitopsapi --create-namesp
 # Check pod is running
 kubectl get pods -n gitopsapi
 
-# Check liveness (process running)
-curl -H "Host: gitopsgui.podzone.cloud" http://freyr:8081/health
+# Port-forward for direct access
+kubectl port-forward -n gitopsapi svc/gitopsapi 8000:8000
 
-# Check readiness (git init complete)
-curl -H "Host: gitopsgui.podzone.cloud" http://freyr:8081/ready
+# Health check (process running)
+curl http://localhost:8000/health
 
-# Check logs if pod is not ready
-kubectl logs -n gitopsapi deploy/gitopsapi
+# Readiness check (git init complete)
+curl http://localhost:8000/ready
+
+# Browse API docs
+open http://localhost:8000/docs
 ```
-
-**Note**: All requests to the GitOpsAPI via the Gateway require the `Host: gitopsgui.podzone.cloud` header. See [run-tests.sh](../tests/test_data/run-tests.sh) for example curl commands.
 
 ---
 
 ## Environment Variables (Helm chart managed)
 
-The following environment variables are injected from secrets by the Helm chart (`charts/gitopsapi/templates/deployment.yaml`). These do not need to be set manually.
+The Helm chart injects these environment variables from secrets. They do not need to be set manually.
 
 | Env var | Source secret | Key | Purpose |
 | --- | --- | --- | --- |
+| `GITOPS_CATALOG_REPO_URL` | Helm value | `gitops.catalogRepoUrl` | Read-only catalog source |
+| `GITOPS_REPO_URL` | Helm value | `gitops.repoUrl` | Writable management repo |
 | `GITHUB_TOKEN` | `gitopsapi-github-token` | `token` | GitHub API auth |
 | `MGMT_KUBECONFIG_SECRET` | `gitopsapi-mgmt-kubeconfig` | `kubeconfig` | Management cluster access |
 | `SOPS_AGE_KEY_SECRET` | `gitopsapi-age-key` | `key.txt` | SOPS encryption |
-| `SSH_PRIVATE_KEY` | `gitopsapi-ssh-key` | `id_rsa` | Git SSH auth |

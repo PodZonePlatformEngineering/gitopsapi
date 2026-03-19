@@ -113,8 +113,11 @@ Dev bypass: `GITOPSGUI_DEV_ROLE=cluster_operator` skips all auth checks.
 
 | Document | Purpose |
 | --- | --- |
-| [docs/claude-code-setup-guide.md](docs/claude-code-setup-guide.md) | Full developer reference — models, patterns, gotchas |
+| [docs/getting-started.md](docs/getting-started.md) | Getting started — install, verify, add capabilities step by step |
+| [docs/provisioning-platform-guide.md](docs/provisioning-platform-guide.md) | Cluster provisioning with CAPI — full workflow |
+| [docs/roles-reference.md](docs/roles-reference.md) | User roles and permissions |
+| [docs/deployment-prerequisites.md](docs/deployment-prerequisites.md) | Secrets and Helm values reference |
+| [docs/application-catalog.md](docs/application-catalog.md) | Managed application catalog |
 | [docs/architecture/v0.1.0-architecture.md](docs/architecture/v0.1.0-architecture.md) | System architecture |
 | [docs/api-first-testing-protocol.md](docs/api-first-testing-protocol.md) | Testing protocol — attribute review before API calls |
-| [docs/application-catalog.md](docs/application-catalog.md) | Managed application catalog |
-| [docs/deployment-prerequisites.md](docs/deployment-prerequisites.md) | Deployment prerequisites |
+| [docs/claude-code-setup-guide.md](docs/claude-code-setup-guide.md) | Developer reference — models, patterns, gotchas |
