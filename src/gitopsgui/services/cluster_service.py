@@ -98,6 +98,18 @@ def _render_values(spec: ClusterSpec) -> str:
     if spec.allow_scheduling_on_control_planes:
         data["controlplane"]["allow_scheduling_on_control_planes"] = True
 
+    # proxmox: section consumed by cluster-chart templates
+    if spec.platform and spec.platform.type == "proxmox":
+        template_node = spec.platform.template_node or spec.platform.nodes[0]
+        data["proxmox"] = {
+            "allowed_nodes": spec.platform.nodes,
+            "template": {
+                "sourcenode": template_node,
+                "template_vmid": spec.platform.template_vmid,
+            },
+            "vm": {"bridge": spec.platform.bridge},
+        }
+
     # GitOpsAPI metadata (roundtrip fields — not consumed by cluster-chart)
     if spec.platform:
         data["platform"] = {
@@ -105,6 +117,10 @@ def _render_values(spec: ClusterSpec) -> str:
             "type": spec.platform.type,
             "endpoint": spec.platform.endpoint,
             "nodes": spec.platform.nodes,
+            "template_node": spec.platform.template_node,
+            "template_vmid": spec.platform.template_vmid,
+            "credentials_ref": spec.platform.credentials_ref,
+            "bridge": spec.platform.bridge,
         }
     data["vip"] = spec.vip
     if spec.gitops_repo_url:
