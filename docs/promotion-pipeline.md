@@ -1,6 +1,23 @@
 # Promotion Pipeline
 
 GitOpsAPI manages application deployments through a gated promotion pipeline: dev → ETE → prod.
+All mutations flow through git: the API writes manifests to feature branches, opens PRs for human
+review and approval, and relies on Flux CD to reconcile approved state onto target clusters.
+
+## Multi-Repo Architecture
+
+Each cluster has **two** git repositories:
+
+| Repo | Purpose | PR target for |
+| ---- | ------- | ------------- |
+| `{cluster}-infra` | Flux bootstrap manifests, infrastructure Kustomizations, cluster-specific config | Flux Kustomization entries (e.g. `clusters/{cluster}/{cluster}-apps.yaml`) |
+| `{cluster}-apps` | Application HelmReleases, values, Kustomization entries | Application changes: HelmRelease at `gitops/gitops-apps/{name}/{name}.yaml`, values override at `gitops/gitops-apps/{name}/{name}-values-{cluster}.yaml` |
+
+A third repo, `cluster-charts` (the management repo), holds cluster provisioning definitions.
+PRs for cluster lifecycle operations (provision, suspend, decommission) target this repo.
+
+Routing between repos is handled by `src/gitopsgui/services/repo_router.py`.
+URL convention: `git@github.com:{GITHUB_ORG}/{cluster}-apps.git` and `git@github.com:{GITHUB_ORG}/{cluster}-infra.git`.
 
 ## Pipeline Stages
 
@@ -23,8 +40,46 @@ GitOpsAPI manages application deployments through a gated promotion pipeline: de
 ### Stage 3: Production (gitopsprod cluster)
 
 - **Trigger**: ETE verification passes + approvals received
-- **Required approvals**: Build Manager + Release Manager
+- **Required approvals**: Build Manager + Cluster Operator
 - Artifact deployed to gitopsprod cluster
+
+## Stage Labels and Approver Rules
+
+PRs raised by GitOpsAPI carry a `stage:` label that drives required-approver enforcement:
+
+| Label | Stage | Required approvers |
+| ----- | ----- | ------------------ |
+| `stage:dev` | Development | `build_manager` |
+| `stage:ete` | End-to-End Testing | `build_manager` |
+| `stage:production` | Production | `build_manager` + `cluster_operator` |
+
+Approver rules are enforced at two levels:
+
+1. **API layer** — `POST /api/v1/prs/{pr_number}/approve` checks the caller's role against
+   the stage label before calling the git forge approve API.
+2. **Git forge layer** — branch protection rules on the target repo enforce the same approval
+   matrix (BR-AUTH-004).
+
+## PR Endpoints
+
+| Method | Endpoint | Description | Roles |
+| ------ | -------- | ----------- | ----- |
+| GET | `/api/v1/prs` | List PRs (filter by `state`, `label`) | cluster_operator, build_manager, senior_developer |
+| GET | `/api/v1/prs/{pr_number}` | Get PR detail | cluster_operator, build_manager, senior_developer |
+| POST | `/api/v1/prs/{pr_number}/approve` | Approve PR (role and stage checked) | cluster_operator, build_manager |
+| POST | `/api/v1/prs/{pr_number}/merge` | Merge PR (requires approvals satisfied) | cluster_operator, build_manager |
+
+## What Raises a PR Where
+
+| Operation | Target repo | Label |
+| --------- | ----------- | ----- |
+| Assign application to cluster | `{cluster}-apps` | `stage:{pipeline_stage}` |
+| Update cluster-specific values | `{cluster}-apps` | `stage:{pipeline_stage}` |
+| Remove application from cluster | `{cluster}-apps` | `stage:{pipeline_stage}` |
+| Add Flux Kustomization entry | `{cluster}-infra` | `stage:{pipeline_stage}` |
+| Provision cluster | `cluster-charts` (management) | `stage:production` |
+| Suspend cluster | `cluster-charts` (management) | `stage:production` |
+| Decommission cluster | `cluster-charts` (management) | `stage:production` |
 
 ## Parallel Development
 
@@ -41,35 +96,15 @@ T3: v1.1 promoted to gitopsete
 
 Each change pipeline instance is independent — concurrent releases at different stages do not block each other.
 
-## Promoting an Artifact
+## Rollback
 
-### Via GitOpsGUI (when available)
+Production issues trigger rollback + new dev cycle:
 
-1. Open change pipeline in GitOpsGUI
-2. Select release to promote
-3. Click "Promote to ETE" / "Promote to Production"
-4. Approval workflow triggered automatically
+1. Revert gitopsprod to previous chart version (PR, immediate approval)
+2. Root cause analysis on gitopsdev
+3. Fix → re-promote through full pipeline
 
-### Via PR (bootstrap/manual)
-
-Until GitOpsGUI is operational, promotion is via direct PR to cluster09:
-
-**Dev → ETE**:
-
-```bash
-# Add application to gitopsete kustomization
-# clusters/gitopsete/gitopsete-apps.yaml
-# Update chart version in gitops/gitops-apps/<app>/<app>-values.yaml
-# Create PR, get Build Manager approval, merge
-```
-
-**ETE → Prod**:
-
-```bash
-# Add application to gitopsprod kustomization
-# clusters/gitopsprod/gitopsprod-apps.yaml
-# Create PR, get Build Manager + Release Manager approval, merge
-```
+No direct hotfixes to production — all fixes go through dev → ETE → prod.
 
 ## Example: GitOpsAPI v0.1.0 Promotion
 
@@ -94,13 +129,3 @@ Phase 5 (Cleanup):    Remove from openclaw bootstrap deployment
   "chartRepository": "https://motttt.github.io/gitopsapi"
 }
 ```
-
-## Rollback
-
-Production issues trigger rollback + new dev cycle:
-
-1. Revert gitopsprod to previous chart version (PR, immediate approval)
-2. Root cause analysis on gitopsdev
-3. Fix → re-promote through full pipeline
-
-No direct hotfixes to production — all fixes go through dev → ETE → prod.
