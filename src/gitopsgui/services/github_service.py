@@ -248,7 +248,7 @@ class GitHubService:
                         f"Repository {owner}/{name} already exists but is public — "
                         f"TR-032 requires all platform-managed repos to be private."
                     )
-                return existing.ssh_url
+                return existing.clone_url
             except GithubException as exc:
                 if exc.status != 404:
                     raise
@@ -258,9 +258,9 @@ class GitHubService:
                 repo = org.create_repo(name, description=description, private=True, auto_init=True)
             except GithubException:
                 # owner is a user (not an org)
-                user = gh.get_user(owner)
+                user = gh.get_user()
                 repo = user.create_repo(name, description=description, private=True, auto_init=True)
-            return repo.ssh_url
+            return repo.clone_url
 
         return await asyncio.to_thread(_run)
 
