@@ -6,7 +6,11 @@
     "name": "venus",
     "type": "proxmox",
     "endpoint": "https://192.168.4.50:8006",
-    "nodes": ["venus"]
+    "nodes": ["venus"],
+    "template_node": "venus",
+    "template_vmid": 100,
+    "credentials_ref": "capmox-manager-credentials",
+    "bridge": "vmbr0"
   },
   "vip": "192.168.4.180",
   "ip_range": "192.168.4.181-192.168.4.187",

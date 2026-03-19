@@ -17,10 +17,14 @@ class BastionSpec(BaseModel):
 
 
 class PlatformSpec(BaseModel):
-    name: str           # human identifier for the hypervisor/provisioning node (e.g. "erectus")
-    type: str = "proxmox"  # provisioning platform type; default proxmox
-    endpoint: str       # platform management API URL (e.g. "https://192.168.1.201:8006")
-    nodes: List[str]    # provisioning node names (single: ["erectus"], multi: ["pve1", "pve2"])
+    name: str                # human identifier for the hypervisor (e.g. "venus", "saturn")
+    type: str = "proxmox"   # provisioning platform type; only "proxmox" supported
+    endpoint: str            # Proxmox API URL (e.g. "https://192.168.4.50:8006")
+    nodes: List[str]         # Proxmox node names allowed to schedule VMs (→ ProxmoxCluster.allowedNodes)
+    template_node: Optional[str] = None  # node holding the VM clone template; defaults to nodes[0]
+    template_vmid: int = 100             # Proxmox VM template ID on template_node
+    credentials_ref: str = "capmox-manager-credentials"  # K8s secret name with CAPMOX API credentials
+    bridge: str = "vmbr0"               # Proxmox VM network bridge
 
 
 class ClusterSpec(BaseModel):
