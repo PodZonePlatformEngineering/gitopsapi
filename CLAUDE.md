@@ -56,6 +56,32 @@ GITHUB_ORG=MoTTTT       # org for per-cluster repo URLs
 - Deploy key + SOPS key automation (TR-039a/b): manual steps, not yet automated (CC-053)
 - Gap label: **CC-055** (cluster registry)
 
+## API-First Testing Protocol
+
+Before calling any GitOpsAPI write endpoint in testing, document and review all object attributes
+(fields, types, defaults, constraints) first. This practice catches schema gaps before roundtrip
+failures in Flux or CAPI.
+
+**Steps** (required before every POST/PUT in a test session):
+
+1. List all fields for the target object (ClusterSpec, ApplicationSpec, ApplicationClusterConfig).
+2. Review each field's type, default value, and any constraints (e.g. `ip_range` format, enum values,
+   required vs. optional) against the Pydantic model in `src/gitopsgui/models/`.
+3. Verify the test data JSON file matches the schema — confirm `_comment`/`_curl` metadata keys are
+   present (they are stripped before the payload is sent; never include them in production code).
+4. Make the API call only after steps 1–3 are complete and any schema gaps are resolved.
+
+**Test data directory**: `tests/test_data/`
+
+| Subdirectory | Endpoint |
+| --- | --- |
+| `clusters/` | `POST /api/v1/clusters`, `PUT /api/v1/clusters/{name}` |
+| `applications/` | `POST /api/v1/applications`, `PUT /api/v1/applications/{name}` |
+| `application-configs/` | `POST /api/v1/application-configs`, `PATCH /api/v1/application-configs/{id}` |
+
+Every write endpoint must have a corresponding test data file with all fields documented.
+See `docs/api-first-testing-protocol.md` for the full test plan.
+
 ## Image build (on erectus 192.168.1.201)
 ```bash
 rsync -az --delete src/ colleymj@192.168.1.201:~/gitopsapi-build/src/
