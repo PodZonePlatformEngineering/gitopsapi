@@ -26,6 +26,7 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 # Local dev flags — set to "1" to skip remote git/GitHub operations
 SKIP_INIT = os.environ.get("GITOPS_SKIP_INIT", "") == "1"
 SKIP_PUSH = os.environ.get("GITOPS_SKIP_PUSH", "") == "1"
+SKIP_APPROVAL_CHECK = os.environ.get("GITOPS_SKIP_APPROVAL_CHECK", "") == "1"
 
 GIT_AUTHOR_NAME = "GitOpsAPI"
 GIT_AUTHOR_EMAIL = "gitopsapi@gitopsgui"
