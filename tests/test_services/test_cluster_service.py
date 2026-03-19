@@ -5,7 +5,7 @@ Unit tests for ClusterService — mocks GitService and GitHubService.
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from gitopsgui.models.cluster import ClusterSpec, ClusterDimensions, PlatformSpec
+from gitopsgui.models.cluster import ClusterSpec, ClusterDimensions, PlatformSpec, TalosTemplateSpec
 from gitopsgui.services.cluster_service import (
     ClusterService, _render_values, _render_kustomization, _render_cluster_yaml,
     _set_kustomization_suspended, _remove_kustomization,
@@ -312,3 +312,86 @@ async def test_decommission_cluster_creates_pr_and_archives():
     assert archived_names == {"testcluster-infra", "testcluster-apps"}
     assert result.archived_repos == ["testcluster-infra", "testcluster-apps"]
     assert result.pr_url == "https://github.com/test/pr/11"
+
+
+# ---------------------------------------------------------------------------
+# TalosTemplateSpec
+# ---------------------------------------------------------------------------
+
+def test_talos_template_spec_defaults():
+    t = TalosTemplateSpec()
+    assert t.name == "0-talos-template"
+    assert t.version == "v1.9.5"
+    assert t.vmid == 100
+    assert t.node is None
+
+
+def test_talos_template_spec_custom_values():
+    t = TalosTemplateSpec(name="my-template", version="v1.10.0", vmid=200, node="pve2")
+    assert t.name == "my-template"
+    assert t.version == "v1.10.0"
+    assert t.vmid == 200
+    assert t.node == "pve2"
+
+
+# ---------------------------------------------------------------------------
+# _render_values — TalosTemplateSpec integration
+# ---------------------------------------------------------------------------
+
+def test_render_values_uses_talos_template_node_for_sourcenode():
+    """When talos_template.node is set it is used as proxmox.template.sourcenode."""
+    platform = PlatformSpec(
+        name="test-hypervisor",
+        endpoint="https://192.168.1.10:8006",
+        nodes=["node1", "node2"],
+        talos_template=TalosTemplateSpec(node="node2"),
+    )
+    spec = _SPEC.model_copy(update={"platform": platform})
+    out = _render_values(spec)
+    assert "sourcenode: node2" in out
+
+
+def test_render_values_falls_back_to_nodes0_when_talos_template_node_is_none():
+    """When talos_template.node is None, proxmox.template.sourcenode defaults to nodes[0]."""
+    platform = PlatformSpec(
+        name="test-hypervisor",
+        endpoint="https://192.168.1.10:8006",
+        nodes=["primary-node"],
+        talos_template=TalosTemplateSpec(node=None),
+    )
+    spec = _SPEC.model_copy(update={"platform": platform})
+    out = _render_values(spec)
+    assert "sourcenode: primary-node" in out
+
+
+def test_render_values_uses_talos_template_vmid():
+    """proxmox.template.template_vmid comes from talos_template.vmid."""
+    platform = PlatformSpec(
+        name="test-hypervisor",
+        endpoint="https://192.168.1.10:8006",
+        nodes=["test-hypervisor"],
+        talos_template=TalosTemplateSpec(vmid=999),
+    )
+    spec = _SPEC.model_copy(update={"platform": platform})
+    out = _render_values(spec)
+    assert "template_vmid: 999" in out
+
+
+def test_render_values_includes_talos_template_name_and_version_in_platform_block():
+    """platform roundtrip block includes talos_template.name and talos_template.version."""
+    platform = PlatformSpec(
+        name="test-hypervisor",
+        endpoint="https://192.168.1.10:8006",
+        nodes=["test-hypervisor"],
+        talos_template=TalosTemplateSpec(name="my-talos-tmpl", version="v1.10.1"),
+    )
+    spec = _SPEC.model_copy(update={"platform": platform})
+    out = _render_values(spec)
+    assert "my-talos-tmpl" in out
+    assert "v1.10.1" in out
+
+
+def test_render_values_platform_block_has_talos_template_subkey():
+    """The platform: block in values YAML must contain a talos_template: sub-block."""
+    out = _render_values(_SPEC)
+    assert "talos_template:" in out

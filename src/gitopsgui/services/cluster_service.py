@@ -100,12 +100,12 @@ def _render_values(spec: ClusterSpec) -> str:
 
     # proxmox: section consumed by cluster-chart templates
     if spec.platform and spec.platform.type == "proxmox":
-        template_node = spec.platform.template_node or spec.platform.nodes[0]
+        template_node = spec.platform.talos_template.node or spec.platform.nodes[0]
         data["proxmox"] = {
             "allowed_nodes": spec.platform.nodes,
             "template": {
                 "sourcenode": template_node,
-                "template_vmid": spec.platform.template_vmid,
+                "template_vmid": spec.platform.talos_template.vmid,
             },
             "vm": {"bridge": spec.platform.bridge},
         }
@@ -117,8 +117,12 @@ def _render_values(spec: ClusterSpec) -> str:
             "type": spec.platform.type,
             "endpoint": spec.platform.endpoint,
             "nodes": spec.platform.nodes,
-            "template_node": spec.platform.template_node,
-            "template_vmid": spec.platform.template_vmid,
+            "talos_template": {
+                "name": spec.platform.talos_template.name,
+                "version": spec.platform.talos_template.version,
+                "vmid": spec.platform.talos_template.vmid,
+                "node": spec.platform.talos_template.node,
+            },
             "credentials_ref": spec.platform.credentials_ref,
             "bridge": spec.platform.bridge,
         }

@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 
 
@@ -16,13 +16,19 @@ class BastionSpec(BaseModel):
     api_port: int = 6443  # port on bastion that forwards to k8s API server
 
 
+class TalosTemplateSpec(BaseModel):
+    name: str = "0-talos-template"  # VM template name on the hypervisor
+    version: str = "v1.9.5"        # Talos release version (informational, not enforced)
+    vmid: int = 100                 # VMID of the template on this hypervisor
+    node: Optional[str] = None     # Proxmox node where template resides; defaults to platform.nodes[0]
+
+
 class PlatformSpec(BaseModel):
     name: str                # human identifier for the hypervisor (e.g. "venus", "saturn")
     type: str = "proxmox"   # provisioning platform type; only "proxmox" supported
     endpoint: str            # Proxmox API URL (e.g. "https://192.168.4.50:8006")
     nodes: List[str]         # Proxmox node names allowed to schedule VMs (→ ProxmoxCluster.allowedNodes)
-    template_node: Optional[str] = None  # node holding the VM clone template; defaults to nodes[0]
-    template_vmid: int = 100             # Proxmox VM template ID on template_node
+    talos_template: TalosTemplateSpec = Field(default_factory=TalosTemplateSpec)
     credentials_ref: str = "capmox-manager-credentials"  # K8s secret name with CAPMOX API credentials
     bridge: str = "vmbr0"               # Proxmox VM network bridge
 
