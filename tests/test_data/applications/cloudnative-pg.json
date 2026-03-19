@@ -1,0 +1,10 @@
+{
+  "_comment": "POST /api/v1/applications — cloudnative-pg operator (prerequisite for keycloak)",
+  "_curl": "curl -s -X POST -H 'Host: gitopsgui.podzone.cloud' -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @applications/cloudnative-pg.json http://freyr:8081/api/v1/applications",
+  "name": "cloudnative-pg",
+  "cluster": "platform-services",
+  "helm_repo_url": "https://cloudnative-pg.io/charts/",
+  "chart_name": "cloudnative-pg",
+  "chart_version": "0.27.1",
+  "values_yaml": ""
+}

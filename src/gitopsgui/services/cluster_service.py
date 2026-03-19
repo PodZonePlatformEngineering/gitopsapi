@@ -18,6 +18,7 @@ import yaml
 from ..models.cluster import (
     ClusterSpec, ClusterResponse, ClusterStatus,
     ClusterSuspendResponse, ClusterDecommissionResponse,
+    PlatformSpec,
 )
 from .git_service import GitService
 from .github_service import GitHubService
@@ -98,12 +99,20 @@ def _render_values(spec: ClusterSpec) -> str:
         data["controlplane"]["allow_scheduling_on_control_planes"] = True
 
     # GitOpsAPI metadata (roundtrip fields — not consumed by cluster-chart)
-    data["platform"] = spec.platform
+    if spec.platform:
+        data["platform"] = {
+            "name": spec.platform.name,
+            "type": spec.platform.type,
+            "endpoint": spec.platform.endpoint,
+            "nodes": spec.platform.nodes,
+        }
     data["vip"] = spec.vip
     if spec.gitops_repo_url:
         data["gitops_repo_url"] = spec.gitops_repo_url
     data["sops_secret_ref"] = spec.sops_secret_ref
     data["allow_scheduling_on_control_planes"] = spec.allow_scheduling_on_control_planes
+    if spec.external_hosts:
+        data["external_hosts"] = spec.external_hosts
     data["dimensions"] = {
         "control_plane_count": spec.dimensions.control_plane_count,
         "worker_count": spec.dimensions.worker_count,
@@ -199,15 +208,19 @@ class ClusterService:
         except FileNotFoundError:
             return None
 
+        raw_platform = data.get("platform")
+        platform = PlatformSpec(**raw_platform) if isinstance(raw_platform, dict) else None
+
         spec = ClusterSpec(
             name=name,
-            platform=data.get("platform", "proxmox"),
+            platform=platform,
             vip=data.get("vip", ""),
             ip_range=data.get("network", {}).get("ip_ranges", [""])[0],
             dimensions=data.get("dimensions", {}),
             gitops_repo_url=data.get("gitops_repo_url", ""),
             sops_secret_ref=data.get("sops_secret_ref", ""),
             allow_scheduling_on_control_planes=data.get("allow_scheduling_on_control_planes", False),
+            external_hosts=data.get("external_hosts", []),
         )
         return ClusterResponse(name=name, spec=spec)
 

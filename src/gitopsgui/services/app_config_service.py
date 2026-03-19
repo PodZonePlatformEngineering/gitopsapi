@@ -51,23 +51,28 @@ def _values_override_path(app_id: str, cluster_id: str) -> str:
 def _render_kustomization_entry(spec: ApplicationClusterConfig) -> str:
     """Render a Kustomization YAML document for one app→cluster assignment."""
     source_ref_name = spec.gitops_source_ref or f"{spec.cluster_id}-apps"
-    return textwrap.dedent(f"""\
-        ---
-        apiVersion: kustomize.toolkit.fluxcd.io/v1
-        kind: Kustomization
-        metadata:
-          name: {spec.app_id}
-          namespace: flux-system
-        spec:
-          interval: 1h
-          retryInterval: 1m
-          timeout: 5m
-          sourceRef:
-            kind: GitRepository
-            name: {source_ref_name}
-          path: ./{_APPS_BASE}/{spec.app_id}
-          prune: true
-    """)
+    annotations_block = ""
+    if spec.external_hosts:
+        hosts_csv = ",".join(spec.external_hosts)
+        annotations_block = f"  annotations:\n    gitopsapi.podzone.net/external-hosts: \"{hosts_csv}\"\n"
+    return (
+        f"---\n"
+        f"apiVersion: kustomize.toolkit.fluxcd.io/v1\n"
+        f"kind: Kustomization\n"
+        f"metadata:\n"
+        f"  name: {spec.app_id}\n"
+        f"  namespace: flux-system\n"
+        f"{annotations_block}"
+        f"spec:\n"
+        f"  interval: 1h\n"
+        f"  retryInterval: 1m\n"
+        f"  timeout: 5m\n"
+        f"  sourceRef:\n"
+        f"    kind: GitRepository\n"
+        f"    name: {source_ref_name}\n"
+        f"  path: ./{_APPS_BASE}/{spec.app_id}\n"
+        f"  prune: true\n"
+    )
 
 
 def _find_kustomization_block(content: str, app_id: str) -> Optional[str]:
@@ -174,11 +179,14 @@ class AppConfigService:
                 continue
             source_ref = spec.get("sourceRef", {}).get("name", "")
             external_ref = source_ref if source_ref != f"{cluster_id}-apps" else None
+            hosts_csv = meta.get("annotations", {}).get("gitopsapi.podzone.net/external-hosts", "")
+            external_hosts = [h.strip() for h in hosts_csv.split(",") if h.strip()]
             results.append(ApplicationClusterConfigResponse(
                 id=_config_id(app_id, cluster_id),
                 app_id=app_id,
                 cluster_id=cluster_id,
                 gitops_source_ref=external_ref,
+                external_hosts=external_hosts,
             ))
         return results
 
@@ -280,6 +288,7 @@ class AppConfigService:
             enabled=spec.enabled,
             pipeline_stage=spec.pipeline_stage,
             gitops_source_ref=spec.gitops_source_ref,
+            external_hosts=spec.external_hosts,
             pr_url=values_pr_url or pr_url,
         )
 

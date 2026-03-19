@@ -3,8 +3,9 @@
 ## Role
 FastAPI backend (`src/gitopsgui/`) + React frontend (future). Git-as-object-store: all writes
 via feature branch + PR, no direct commits to main. Read task assignments filtered
-`🧠 Claude Code` from `/Users/martincolley/workspace/podzoneAgentTeam/planning/tasks.md`.
-Write blockers to `QUESTIONS.md` in this repo, not to tasks.md.
+`🧠 Claude Code` from `/Users/martincolley/workspace/podzoneAgentTeam/planning/team-tasklist.md`.
+Write blockers/questions to `QUESTIONS.md` in this repo (monitored by Team Lead).
+Escalate to Team Lead via `podzoneAgentTeam/agents/team-lead/incoming/YYYY-MM-DD-{task}.md`.
 
 ## Commands
 ```
@@ -72,7 +73,8 @@ kubectl --context openclaw-admin@openclaw   --server=https://192.168.1.80:6447 .
 ```
 
 ## Key files outside this repo
-- Tasks: `/Users/martincolley/workspace/podzoneAgentTeam/planning/tasks.md`
+
+- Tasks: `/Users/martincolley/workspace/podzoneAgentTeam/planning/team-tasklist.md`
 - Specs: `podzoneAgentTeam/specifications/gitopsgui-requirements.md` (v0.4 current)
 - API schema: `podzoneAgentTeam/specifications/gitopsapi-schema.md`
-- Trismagistus tasks (gaps to hand off): `podzoneAgentTeam/agents/claude-code/trismagistus-tasks.md`
+- Team Lead inbox (escalations): `podzoneAgentTeam/agents/team-lead/incoming/`

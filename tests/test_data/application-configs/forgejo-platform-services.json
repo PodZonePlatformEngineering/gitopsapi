@@ -1,0 +1,9 @@
+{
+  "_comment": "POST /api/v1/application-configs — Forgejo on platform-services (git.podzone.cloud)",
+  "_curl": "curl -s -X POST -H 'Host: gitopsgui.podzone.cloud' -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @application-configs/forgejo-platform-services.json http://freyr:8081/api/v1/application-configs",
+  "app_id": "forgejo",
+  "cluster_id": "platform-services",
+  "enabled": true,
+  "values_override": "",
+  "external_hosts": ["git.podzone.cloud"]
+}

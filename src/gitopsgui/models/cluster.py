@@ -16,9 +16,16 @@ class BastionSpec(BaseModel):
     api_port: int = 6443  # port on bastion that forwards to k8s API server
 
 
+class PlatformSpec(BaseModel):
+    name: str           # human identifier for the hypervisor/provisioning node (e.g. "erectus")
+    type: str = "proxmox"  # provisioning platform type; default proxmox
+    endpoint: str       # platform management API URL (e.g. "https://192.168.1.201:8006")
+    nodes: List[str]    # provisioning node names (single: ["erectus"], multi: ["pve1", "pve2"])
+
+
 class ClusterSpec(BaseModel):
     name: str
-    platform: str
+    platform: Optional[PlatformSpec] = None  # null for externally-managed clusters (managed_gitops=False)
     vip: str
     ip_range: str
     dimensions: ClusterDimensions
@@ -28,6 +35,7 @@ class ClusterSpec(BaseModel):
     extra_manifests: List[str] = []  # URLs applied as Talos extra_manifests (cilium, flux, gateway-api, etc.)
     bastion: Optional[BastionSpec] = None  # if set, kubeconfig server URL is rewritten to bastion
     allow_scheduling_on_control_planes: bool = False  # enables Talos allowSchedulingOnControlPlanes; required when worker_count=0
+    external_hosts: List[str] = []  # FQDNs served externally via this cluster's Gateway; drives cert-manager certs + Gateway listeners at provisioning time
 
 
 class ClusterSuspendResponse(BaseModel):

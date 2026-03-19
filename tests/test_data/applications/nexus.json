@@ -1,0 +1,10 @@
+{
+  "_comment": "POST /api/v1/applications — Nexus artifact repository (pull-through proxy, replaces Harbor)",
+  "_curl": "curl -s -X POST -H 'Host: gitopsgui.podzone.cloud' -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @applications/nexus.json http://freyr:8081/api/v1/applications",
+  "name": "nexus",
+  "cluster": "platform-services",
+  "helm_repo_url": "https://sonatype.github.io/helm3-charts",
+  "chart_name": "nexus-repository-manager",
+  "chart_version": "64.2.0",
+  "values_yaml": ""
+}

@@ -1,0 +1,10 @@
+{
+  "_comment": "POST /api/v1/applications — Keycloak SSO (codecentric keycloakx)",
+  "_curl": "curl -s -X POST -H 'Host: gitopsgui.podzone.cloud' -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @applications/keycloak.json http://freyr:8081/api/v1/applications",
+  "name": "keycloak",
+  "cluster": "platform-services",
+  "helm_repo_url": "https://codecentric.github.io/helm-charts",
+  "chart_name": "keycloakx",
+  "chart_version": "7.1.9",
+  "values_yaml": ""
+}

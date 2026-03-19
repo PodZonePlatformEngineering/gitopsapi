@@ -99,6 +99,25 @@ def test_render_kustomization_entry_external_source_ref():
     assert "name: bitnami-charts" in rendered
 
 
+def test_render_kustomization_entry_external_hosts_annotation():
+    spec = _SPEC.model_copy(update={"external_hosts": ["login.podzone.cloud"]})
+    rendered = _render_kustomization_entry(spec)
+    assert "gitopsapi.podzone.net/external-hosts" in rendered
+    assert "login.podzone.cloud" in rendered
+
+
+def test_render_kustomization_entry_multiple_external_hosts():
+    spec = _SPEC.model_copy(update={"external_hosts": ["login.podzone.cloud", "sso.podzone.cloud"]})
+    rendered = _render_kustomization_entry(spec)
+    assert "login.podzone.cloud,sso.podzone.cloud" in rendered
+
+
+def test_render_kustomization_entry_no_annotation_when_empty():
+    rendered = _render_kustomization_entry(_SPEC)
+    assert "gitopsapi.podzone.net/external-hosts" not in rendered
+    assert "annotations" not in rendered
+
+
 # ---------------------------------------------------------------------------
 # block manipulation
 # ---------------------------------------------------------------------------
@@ -135,6 +154,48 @@ def test_comment_kustomization_block():
     for line in updated.splitlines():
         if "keycloak" in line and "existing" not in line and "---" not in line:
             assert line.lstrip().startswith("#"), f"Expected commented line: {line!r}"
+
+
+# ---------------------------------------------------------------------------
+# list_by_cluster — external_hosts round-trip
+# ---------------------------------------------------------------------------
+
+_APPS_YAML_WITH_HOSTS = textwrap.dedent("""\
+    ---
+    apiVersion: kustomize.toolkit.fluxcd.io/v1
+    kind: Kustomization
+    metadata:
+      name: forgejo
+      namespace: flux-system
+      annotations:
+        gitopsapi.podzone.net/external-hosts: "git.podzone.cloud"
+    spec:
+      interval: 1h
+      sourceRef:
+        kind: GitRepository
+        name: platform-services-apps
+      path: ./gitops/gitops-apps/forgejo
+      prune: true
+""")
+
+
+@pytest.mark.asyncio
+async def test_list_by_cluster_reads_external_hosts():
+    svc = _svc()
+    svc._git.read_file = AsyncMock(return_value=_APPS_YAML_WITH_HOSTS)
+    results = await svc.list_by_cluster("platform-services")
+    assert len(results) == 1
+    assert results[0].app_id == "forgejo"
+    assert results[0].external_hosts == ["git.podzone.cloud"]
+
+
+@pytest.mark.asyncio
+async def test_list_by_cluster_empty_hosts_when_no_annotation():
+    svc = _svc()
+    svc._git.read_file = AsyncMock(return_value=_APPS_YAML)
+    results = await svc.list_by_cluster("security")
+    for r in results:
+        assert r.external_hosts == []
 
 
 # ---------------------------------------------------------------------------

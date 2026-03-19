@@ -36,11 +36,11 @@ def infra_repo_name(cluster: str) -> str:
 
 
 def apps_repo_url(cluster: str) -> str:
-    return f"git@github.com:{_owner()}/{apps_repo_name(cluster)}.git"
+    return f"https://github.com/{_owner()}/{apps_repo_name(cluster)}.git"
 
 
 def infra_repo_url(cluster: str) -> str:
-    return f"git@github.com:{_owner()}/{infra_repo_name(cluster)}.git"
+    return f"https://github.com/{_owner()}/{infra_repo_name(cluster)}.git"
 
 
 def git_for_apps(cluster: str):

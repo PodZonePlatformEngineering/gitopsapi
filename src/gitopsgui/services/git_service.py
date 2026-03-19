@@ -20,6 +20,7 @@ REPO_URL = os.environ.get("GITOPS_REPO_URL", "")
 REPO_BRANCH = os.environ.get("GITOPS_BRANCH", "main")
 REPO_LOCAL_PATH = Path(os.environ.get("GITOPS_LOCAL_PATH", "/tmp/gitops-repo"))
 SSH_KEY_PATH = os.environ.get("GITOPS_SSH_KEY_PATH", "/etc/gitops-ssh/id_rsa")
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
 # Local dev flags — set to "1" to skip remote git/GitHub operations
 SKIP_INIT = os.environ.get("GITOPS_SKIP_INIT", "") == "1"
@@ -31,6 +32,23 @@ GIT_AUTHOR_EMAIL = "gitopsapi@gitopsgui"
 
 def _ssh_env() -> dict:
     return {"GIT_SSH_COMMAND": f"ssh -i {SSH_KEY_PATH} -o StrictHostKeyChecking=no"}
+
+
+_HTTPS_PREFIX = "https://"
+
+
+def _auth_url(url: str) -> str:
+    """Inject GITHUB_TOKEN into HTTPS URLs for git authentication."""
+    if GITHUB_TOKEN and url.startswith(_HTTPS_PREFIX) and "@" not in url[8:]:
+        return url.replace(_HTTPS_PREFIX, f"{_HTTPS_PREFIX}{GITHUB_TOKEN}@", 1)
+    return url
+
+
+def _git_env(url: str) -> dict:
+    """Return git auth environment. HTTPS URLs use embedded credentials; SSH uses key."""
+    if url.startswith(_HTTPS_PREFIX):
+        return {}
+    return _ssh_env()
 
 
 class GitService:
@@ -63,14 +81,14 @@ class GitService:
         if SKIP_INIT and self._local_path.exists() and (self._local_path / ".git").exists():
             self._git_repo = git.Repo(str(self._local_path))
             return
-        env = _ssh_env()
+        env = _git_env(self._repo_url)
         if self._local_path.exists() and (self._local_path / ".git").exists():
             repo = git.Repo(str(self._local_path))
             repo.remotes.origin.pull(REPO_BRANCH, env=env)
         else:
             self._local_path.parent.mkdir(parents=True, exist_ok=True)
             repo = git.Repo.clone_from(
-                self._repo_url,
+                _auth_url(self._repo_url),
                 str(self._local_path),
                 branch=REPO_BRANCH,
                 env=env,
@@ -117,9 +135,10 @@ class GitService:
         """Create and check out a new feature branch from main."""
         def _run():
             repo = self._get_repo()
+            env = _git_env(self._repo_url)
             if not SKIP_INIT:
-                repo.git.fetch("origin", env=_ssh_env())
-                repo.git.pull("origin", REPO_BRANCH, env=_ssh_env())
+                repo.git.fetch("origin", env=env)
+                repo.git.pull("origin", REPO_BRANCH, env=env)
             repo.git.checkout(REPO_BRANCH)
             repo.git.checkout("-b", branch_name)
         await asyncio.to_thread(_run)
@@ -151,7 +170,7 @@ class GitService:
         def _run():
             repo = self._get_repo()
             branch = repo.active_branch.name
-            env = _ssh_env() if SSH_KEY_PATH != "/etc/gitops-ssh/id_rsa" else {}
+            env = _git_env(self._repo_url)
             repo.remotes.origin.push(
                 refspec=f"{branch}:{branch}",
                 **({"env": env} if env else {}),
@@ -172,5 +191,5 @@ class GitService:
         def _run():
             repo = self._get_repo()
             repo.git.checkout(REPO_BRANCH)
-            repo.git.pull("origin", REPO_BRANCH, env=_ssh_env())
+            repo.git.pull("origin", REPO_BRANCH, env=_git_env(self._repo_url))
         await asyncio.to_thread(_run)

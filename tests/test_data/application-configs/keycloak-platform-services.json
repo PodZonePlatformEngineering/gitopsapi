@@ -1,0 +1,9 @@
+{
+  "_comment": "POST /api/v1/application-configs — Keycloak on platform-services (login.podzone.cloud); depends on cloudnative-pg",
+  "_curl": "curl -s -X POST -H 'Host: gitopsgui.podzone.cloud' -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @application-configs/keycloak-platform-services.json http://freyr:8081/api/v1/application-configs",
+  "app_id": "keycloak",
+  "cluster_id": "platform-services",
+  "enabled": true,
+  "values_override": "",
+  "external_hosts": ["login.podzone.cloud"]
+}

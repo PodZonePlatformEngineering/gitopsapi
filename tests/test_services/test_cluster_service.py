@@ -5,16 +5,22 @@ Unit tests for ClusterService — mocks GitService and GitHubService.
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from gitopsgui.models.cluster import ClusterSpec, ClusterDimensions
+from gitopsgui.models.cluster import ClusterSpec, ClusterDimensions, PlatformSpec
 from gitopsgui.services.cluster_service import (
     ClusterService, _render_values, _render_kustomization, _render_cluster_yaml,
     _set_kustomization_suspended, _remove_kustomization,
 )
 
 
+_PLATFORM = PlatformSpec(
+    name="test-hypervisor",
+    endpoint="https://192.168.1.10:8006",
+    nodes=["test-hypervisor"],
+)
+
 _SPEC = ClusterSpec(
     name="test-cluster",
-    platform="proxmox",
+    platform=_PLATFORM,
     vip="192.168.1.100",
     ip_range="192.168.1.101-192.168.1.107",
     dimensions=ClusterDimensions(control_plane_count=1, worker_count=1),
@@ -53,6 +59,32 @@ def test_render_values_extra_manifests_included():
     out = _render_values(spec)
     assert "extra_manifests" in out
     assert "cilium.yaml" in out
+
+
+def test_render_values_platform_included():
+    out = _render_values(_SPEC)
+    assert "test-hypervisor" in out
+    assert "https://192.168.1.10:8006" in out
+    assert "proxmox" in out
+
+
+def test_render_values_external_hosts_included():
+    spec = _SPEC.model_copy(update={"external_hosts": ["git.podzone.cloud", "login.podzone.cloud"]})
+    out = _render_values(spec)
+    assert "external_hosts" in out
+    assert "git.podzone.cloud" in out
+    assert "login.podzone.cloud" in out
+
+
+def test_render_values_external_hosts_omitted_when_empty():
+    out = _render_values(_SPEC)
+    assert "external_hosts" not in out
+
+
+def test_render_values_platform_omitted_when_none():
+    spec = _SPEC.model_copy(update={"platform": None})
+    out = _render_values(spec)
+    assert "platform:" not in out
 
 
 def test_render_values_no_extra_manifests_omitted():

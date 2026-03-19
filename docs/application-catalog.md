@@ -5,6 +5,8 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **Schema**: Each entry uses the GitOpsAPI Application Specification fields where known.
 **`⚠️ RECOMMENDED`**: Fields marked with ⚠️ are unknown/to be confirmed.
 
+> **Cluster deployment state** is maintained separately in [application-deployment-as-is.md](application-deployment-as-is.md).
+
 ---
 
 ## Deployed Applications
@@ -15,14 +17,13 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **GitHub**: <https://github.com/MoTTTT/gitopsapi>
 **Web**: <https://motttt.github.io/gitopsapi>
 **Category**: Platform Management, Internal Tooling
-**Activity**: 2 clusters (openclaw — bootstrap; gitopsdev — target)
 
 | Field | Value |
 | --- | --- |
 | name | gitopsapi |
 | helmRepo | <https://motttt.github.io/gitopsapi> |
 | chart | gitopsapi |
-| chartVersion | 0.1.2 (gitopsdev-apps), 0.1.1 (cluster09) |
+| chartVersion | 0.1.2 |
 | namespace | gitopsapi |
 | applicationRepo | <https://github.com/MoTTTT/gitopsapi> |
 | valuesFile | gitopsapi-values ConfigMap |
@@ -35,7 +36,6 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **GitHub**: ⚠️ RECOMMENDED: <https://github.com/MoTTTT/gitopsgui> (confirm)
 **Web**: ⚠️ RECOMMENDED: <https://gui.podzone.cloud> (confirm)
 **Category**: Platform Management, Internal Tooling
-**Activity**: 0 (planned — gitopsdev first)
 
 | Field | Value |
 | --- | --- |
@@ -54,7 +54,6 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **GitHub**: <https://github.com/keycloak/keycloak>
 **Web**: <https://www.keycloak.org>
 **Category**: Security, Identity
-**Activity**: 1 cluster (cluster09/openclaw — StatefulSet, not Helm)
 
 | Field | Value |
 | --- | --- |
@@ -75,7 +74,6 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **GitHub**: <https://github.com/oauth2-proxy/oauth2-proxy>
 **Web**: <https://oauth2-proxy.github.io/oauth2-proxy>
 **Category**: Security, Networking
-**Activity**: 0 (HelmRepository defined, HelmRelease commented out — pending Keycloak readiness)
 
 | Field | Value |
 | --- | --- |
@@ -93,7 +91,7 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **GitHub**: <https://github.com/goharbor/harbor>
 **Web**: <https://goharbor.io>
 **Category**: Artifact Management, Container Registry
-**Activity**: 1 cluster (cluster09)
+**Status**: DECOMMISSIONING — decision 2026-03-17. Replaced by Nexus (pull-through proxy) + GHCR (own application images). See PROJ-006/T-001.
 
 | Field | Value |
 | --- | --- |
@@ -111,7 +109,6 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **GitHub**: <https://github.com/qdrant/qdrant>
 **Web**: <https://qdrant.tech>
 **Category**: AI/ML Infrastructure, Data Storage
-**Activity**: 1 cluster (cluster09)
 
 | Field | Value |
 | --- | --- |
@@ -129,7 +126,6 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **GitHub**: <https://github.com/ollama/ollama>
 **Web**: <https://ollama.com>
 **Category**: AI/ML Infrastructure
-**Activity**: 1 cluster (cluster09)
 
 | Field | Value |
 | --- | --- |
@@ -147,7 +143,6 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **GitHub**: <https://github.com/opensearch-project/OpenSearch>
 **Web**: <https://opensearch.org>
 **Category**: Observability, Logging, Search
-**Activity**: 1 cluster (cluster09 — 4 HelmReleases: os-master, os-data, os-client, opensearch-dashboards)
 
 | Field | Value |
 | --- | --- |
@@ -167,7 +162,6 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **GitHub**: <https://github.com/opensearch-project/opensearch-k8s-operator>
 **Web**: <https://opster.github.io/opensearch-k8s-operator-chart>
 **Category**: Observability, Operators
-**Activity**: 1 cluster (cluster09)
 
 | Field | Value |
 | --- | --- |
@@ -185,7 +179,6 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **GitHub**: <https://github.com/prometheus-community/helm-charts>
 **Web**: <https://prometheus.io> / <https://grafana.com>
 **Category**: Observability, Monitoring
-**Activity**: 1 cluster (cluster09)
 
 | Field | Value |
 | --- | --- |
@@ -205,7 +198,6 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **GitHub**: <https://github.com/fluent/fluent-bit>
 **Web**: <https://fluentbit.io>
 **Category**: Observability, Logging
-**Activity**: 1 cluster (cluster09 — deployed alongside opensearch stack)
 
 | Field | Value |
 | --- | --- |
@@ -223,7 +215,6 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **GitHub**: <https://github.com/serhanekici/openclaw-helm>
 **Web**: ⚠️ RECOMMENDED: confirm
 **Category**: Networking, Ingress
-**Activity**: 1 cluster (cluster09)
 
 | Field | Value |
 | --- | --- |
@@ -241,7 +232,6 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **GitHub**: <https://github.com/wso2/product-apim>
 **Web**: <https://wso2.com/api-manager>
 **Category**: API Management
-**Activity**: 1 cluster (cluster09)
 
 | Field | Value |
 | --- | --- |
@@ -259,7 +249,6 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **GitHub**: <https://github.com/cert-manager/cert-manager>
 **Web**: <https://cert-manager.io>
 **Category**: Platform Infrastructure, Networking
-**Activity**: Multiple clusters (cluster09, management)
 
 | Field | Value |
 | --- | --- |
@@ -277,7 +266,6 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **GitHub**: <https://github.com/piraeusdatastore/linstor-affinity-controller>
 **Web**: <https://piraeus.io>
 **Category**: Platform Infrastructure, Storage
-**Activity**: 1 cluster (cluster09 storage layer)
 
 | Field | Value |
 | --- | --- |
@@ -289,31 +277,12 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 
 ---
 
-### cluster09-docs / podzone-docs
-
-**Description**: Static documentation sites — rendered MkDocs sites for cluster09 and podzone platform documentation.
-**GitHub**: <https://github.com/MoTTTT/charts> (static-site chart)
-**Web**: ⚠️ RECOMMENDED: confirm hostnames
-**Category**: Documentation
-**Activity**: 1 cluster each (cluster09)
-
-| Field | Value |
-| --- | --- |
-| name | cluster09-docs / podzone-docs |
-| helmRepo | <https://motttt.github.io/charts/> |
-| chart | static-site |
-| chartVersion | 0.1.1 |
-| namespace | cluster09-docs / podzone-docs |
-
----
-
 ### podzone-mpc
 
 **Description**: Podzone MCP context server — Qdrant-backed semantic search for agent context management. Exposes `context-store`, `context-find`, and `context-seed` tools via MCP protocol (SSE transport for cluster deployment, stdio for local Claude Code use).
 **GitHub**: <https://github.com/MoTTTT/podzone-mpc>
 **Web**: n/a (internal service)
 **Category**: AI/ML Infrastructure, Platform Management
-**Activity**: 1 host (erectus — docker compose, migrating to cluster)
 
 | Field | Value |
 | --- | --- |
@@ -335,7 +304,6 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **GitHub**: ⚠️ RECOMMENDED: evaluate Forgejo Actions runner or self-hosted GitHub Actions runner for CI/CD integration
 **Web**: ⚠️ RECOMMENDED: confirm agent type (GitHub Actions runner, Forgejo runner, custom)
 **Category**: CI/CD, Platform Infrastructure
-**Activity**: 1 host (erectus 192.168.1.201 — manual trigger, rsync workflow)
 
 | Field | Value |
 | --- | --- |
@@ -358,7 +326,6 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **GitHub**: <https://github.com/go-gitea/gitea> (Forgejo fork)
 **Web**: <https://forgejo.org>
 **Category**: Source Control, Artifact Management, CI/CD
-**Activity**: 0 (TASK-039 planned — gitopsdev first)
 
 | Field | Value |
 | --- | --- |
@@ -377,7 +344,6 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **GitHub**: <https://github.com/cloudnative-pg/cloudnative-pg>
 **Web**: <https://cloudnative-pg.io>
 **Category**: Data, Operators
-**Activity**: 0 (TASK-041 planned)
 
 | Field | Value |
 | --- | --- |
@@ -391,11 +357,11 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 
 ### nexus
 
-**Description**: Artifact repository manager — Maven, npm, PyPI, Docker proxy and hosted repositories.
+**Description**: Artifact repository manager — replaces Harbor as the caching pull-through proxy for cluster image pulls. Own application images (gitopsapi, etc.) are pushed to GHCR; Nexus provides Docker Hub / GHCR / other upstream proxying for cluster nodes.
 **GitHub**: <https://github.com/sonatype/nexus-public>
 **Web**: <https://www.sonatype.com/products/nexus-repository>
 **Category**: Artifact Management
-**Activity**: 0 (proposed)
+**Priority**: HIGH — Harbor decommission is blocked on Nexus being operational
 
 | Field | Value |
 | --- | --- |
@@ -405,6 +371,8 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 | chartVersion | ⚠️ RECOMMENDED: latest stable |
 | namespace | nexus |
 
+**Replaces**: Harbor (decommission decision 2026-03-17). Harbor was used as a pull-through proxy; that role transfers to Nexus. Own application images migrate to GHCR.
+
 ---
 
 ### redis
@@ -413,7 +381,6 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **GitHub**: <https://github.com/redis/redis>
 **Web**: <https://redis.io>
 **Category**: Data, Messaging, AI/ML Infrastructure
-**Activity**: 0 (proposed — whileyouweresleeping.md)
 
 | Field | Value |
 | --- | --- |
@@ -433,7 +400,6 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **GitHub**: ⚠️ RECOMMENDED: evaluate nfs-server-provisioner or democratic-csi
 **Web**: ⚠️ RECOMMENDED: confirm
 **Category**: Platform Infrastructure, Storage
-**Activity**: 0 (proposed — whileyouweresleeping.md)
 
 | Field | Value |
 | --- | --- |
@@ -451,7 +417,6 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **GitHub**: ⚠️ RECOMMENDED: to be defined (internal chart or upstream) |
 **Web**: ⚠️ RECOMMENDED: to be defined
 **Category**: AI/ML Infrastructure
-**Activity**: 0 (proposed — whileyouweresleeping.md)
 
 | Field | Value |
 | --- | --- |
@@ -471,7 +436,6 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 **GitHub**: ⚠️ RECOMMENDED: new development (internal)
 **Web**: <https://telegram.org>
 **Category**: Platform Management, Notifications
-**Activity**: 0 (strategic — demo target, whileyouweresleeping.md)
 
 | Field | Value |
 | --- | --- |
@@ -488,31 +452,31 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 
 ## Summary
 
-| Application | Category | Status | Clusters |
-| --- | --- | --- | --- |
-| gitopsapi | Platform Mgmt | Deployed | openclaw, gitopsdev |
-| gitopsgui | Platform Mgmt | Planned | — |
-| keycloak | Security | Deployed (StatefulSet) | cluster09 |
-| oauth2-proxy | Security | Configured (inactive) | — |
-| harbor | Artifact Mgmt | Deployed | cluster09 |
-| qdrant | AI/ML | Deployed | cluster09 |
-| ollama | AI/ML | Deployed | cluster09 |
-| opensearch stack | Observability | Deployed | cluster09 |
-| opensearch-operator | Observability | Deployed | cluster09 |
-| prometheus/grafana | Observability | Deployed | cluster09 |
-| fluent-bit | Observability | Deployed | cluster09 |
-| openclaw | Networking | Deployed | cluster09 |
-| wso2 | API Mgmt | Deployed | cluster09 |
-| cert-manager | Platform Infra | Deployed | cluster09, management |
-| piraeus affinity-ctrl | Platform Infra | Deployed | cluster09 |
-| cluster09-docs | Documentation | Deployed | cluster09 |
-| podzone-docs | Documentation | Deployed | cluster09 |
-| podzone-mpc | AI/ML Infrastructure | Active (erectus, migrating) | — |
-| docker-build-agent | CI/CD | Active (manual, erectus) | erectus host |
-| forgejo | Source Control | Planned (TASK-039) | — |
-| cloudnativepg | Data | Planned (TASK-041) | — |
-| nexus | Artifact Mgmt | Proposed | — |
-| redis | Messaging | Proposed | — |
-| nfs-server | Storage | Proposed | — |
-| everything-ai | AI/ML | Proposed | — |
-| telegram-bot | Platform Mgmt | Strategic | — |
+> See [application-deployment-as-is.md](application-deployment-as-is.md) for the full deployment matrix by cluster.
+
+| Application | Category | Status |
+| --- | --- | --- |
+| gitopsapi | Platform Mgmt | Deployed |
+| gitopsgui | Platform Mgmt | Planned |
+| keycloak | Security | Not deployed (cluster09 decommissioned) |
+| oauth2-proxy | Security | Configured (inactive — pending Keycloak) |
+| harbor | Artifact Mgmt | Decommissioning (2026-03-17 decision) |
+| qdrant | AI/ML | Deployed |
+| ollama | AI/ML | Deployed |
+| opensearch stack | Observability | Not deployed (cluster09 decommissioned) |
+| opensearch-operator | Observability | Not deployed (cluster09 decommissioned) |
+| prometheus/grafana | Observability | Not deployed (cluster09 decommissioned) |
+| fluent-bit | Observability | Not deployed (cluster09 decommissioned) |
+| openclaw | Networking | Deployed |
+| wso2 | API Mgmt | Not deployed (cluster09 decommissioned) |
+| cert-manager | Platform Infra | Deployed |
+| piraeus affinity-ctrl | Platform Infra | Deployed |
+| podzone-mpc | AI/ML Infrastructure | Deployed |
+| docker-build-agent | CI/CD | Active (manual, erectus) |
+| forgejo | Source Control | Planned (TASK-039) |
+| cloudnativepg | Data | Planned (TASK-041) |
+| nexus | Artifact Mgmt | Planned (HIGH — replaces Harbor) |
+| redis | Messaging | Proposed |
+| nfs-server | Storage | Proposed |
+| everything-ai | AI/ML | Proposed |
+| telegram-bot | Platform Mgmt | Strategic |

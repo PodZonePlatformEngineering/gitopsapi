@@ -1,0 +1,10 @@
+{
+  "_comment": "POST /api/v1/applications — Forgejo git forge",
+  "_curl": "curl -s -X POST -H 'Host: gitopsgui.podzone.cloud' -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @applications/forgejo.json http://freyr:8081/api/v1/applications",
+  "name": "forgejo",
+  "cluster": "platform-services",
+  "helm_repo_url": "https://codeberg.org/forgejo-contrib/forgejo-helm",
+  "chart_name": "forgejo",
+  "chart_version": "0.15.0",
+  "values_yaml": ""
+}

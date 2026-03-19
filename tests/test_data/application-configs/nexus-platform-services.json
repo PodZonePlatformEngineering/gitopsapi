@@ -1,0 +1,9 @@
+{
+  "_comment": "POST /api/v1/application-configs — Nexus on platform-services (artefacts.podzone.cloud)",
+  "_curl": "curl -s -X POST -H 'Host: gitopsgui.podzone.cloud' -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @application-configs/nexus-platform-services.json http://freyr:8081/api/v1/application-configs",
+  "app_id": "nexus",
+  "cluster_id": "platform-services",
+  "enabled": true,
+  "values_override": "",
+  "external_hosts": ["artefacts.podzone.cloud"]
+}

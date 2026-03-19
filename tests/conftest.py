@@ -43,7 +43,6 @@ NO_ROLE_HEADERS     = {"X-Forwarded-User": "nobody", "X-Auth-Request-Groups": ""
 
 CLUSTER_SPEC = {
     "name": "test-cluster",
-    "platform": "proxmox",
     "vip": "192.168.1.100",
     "ip_range": "192.168.1.101-192.168.1.107",
     "dimensions": {

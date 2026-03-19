@@ -2,7 +2,7 @@
   "_comment": "POST /api/v1/clusters — provision gitopsete cluster",
   "_curl": "curl -s -X POST -H 'Host: gitopsgui.podzone.cloud' -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @clusters/gitopsete-create.json http://freyr:8081/api/v1/clusters",
   "name": "gitopsete",
-  "platform": "proxmox",
+  "platform": null,
   "vip": "192.168.4.130",
   "ip_range": "192.168.4.131-192.168.4.137",
   "dimensions": {

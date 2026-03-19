@@ -1,0 +1,40 @@
+{
+  "_comment": "POST /api/v1/clusters — provision platform-services cluster",
+  "_curl": "curl -s -X POST -H 'Host: gitopsgui.podzone.cloud' -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @clusters/platform-services-create.json http://freyr:8081/api/v1/clusters",
+  "name": "platform-services",
+  "platform": {
+    "name": "venus",
+    "type": "proxmox",
+    "endpoint": "https://192.168.4.50:8006",
+    "nodes": ["venus"]
+  },
+  "vip": "192.168.4.180",
+  "ip_range": "192.168.4.181-192.168.4.187",
+  "dimensions": {
+    "control_plane_count": 1,
+    "worker_count": 2,
+    "cpu_per_node": 4,
+    "memory_gb_per_node": 16,
+    "boot_volume_gb": 50
+  },
+  "managed_gitops": true,
+  "sops_secret_ref": "gitopsapi-age-key",
+  "extra_manifests": [
+    "http://192.168.4.1/cilium.yaml",
+    "http://192.168.4.1/flux.yaml",
+    "http://192.168.4.1/flux-instance-platform-services.yaml",
+    "http://192.168.4.1/flux-secret.yaml",
+    "http://192.168.4.1/gateway-api.yaml"
+  ],
+  "bastion": {
+    "hostname": "freyr",
+    "ip": "192.168.1.80",
+    "api_port": 6448
+  },
+  "allow_scheduling_on_control_planes": false,
+  "external_hosts": [
+    "login.podzone.cloud",
+    "artefacts.podzone.cloud",
+    "git.podzone.cloud"
+  ]
+}

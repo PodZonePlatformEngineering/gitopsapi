@@ -1,0 +1,10 @@
+{
+  "_comment": "POST /api/v1/applications — Cloudflare tunnel agent",
+  "_curl": "curl -s -X POST -H 'Host: gitopsgui.podzone.cloud' -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @applications/cloudflared.json http://freyr:8081/api/v1/applications",
+  "name": "cloudflared",
+  "cluster": "platform-services",
+  "helm_repo_url": "https://cloudflare.github.io/helm-charts",
+  "chart_name": "cloudflare-tunnel-remote",
+  "chart_version": "0.1.2",
+  "values_yaml": ""
+}

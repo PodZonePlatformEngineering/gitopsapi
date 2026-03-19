@@ -1,0 +1,9 @@
+{
+  "_comment": "POST /api/v1/application-configs — Cloudflare tunnel on platform-services (no ingress, outbound tunnel only)",
+  "_curl": "curl -s -X POST -H 'Host: gitopsgui.podzone.cloud' -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @application-configs/cloudflared-platform-services.json http://freyr:8081/api/v1/application-configs",
+  "app_id": "cloudflared",
+  "cluster_id": "platform-services",
+  "enabled": true,
+  "values_override": "",
+  "external_hosts": []
+}

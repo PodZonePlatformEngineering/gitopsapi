@@ -36,8 +36,6 @@ spec:
               value: {{ .Values.gitops.githubOrg | quote }}
             - name: GITOPS_LOCAL_PATH
               value: {{ .Values.gitops.localPath | default "/tmp/gitops-repo" | quote }}
-            - name: GITOPS_SSH_KEY_PATH
-              value: /etc/gitops-ssh/id_rsa
             - name: GITHUB_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -54,9 +52,6 @@ spec:
                   name: {{ .Values.secrets.ageKeySecret }}
                   key: key.txt
           volumeMounts:
-            - name: ssh-key
-              mountPath: /etc/gitops-ssh
-              readOnly: true
             - name: gitops-repo
               mountPath: /tmp/gitops-repo
           resources:
@@ -74,9 +69,5 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 10
       volumes:
-        - name: ssh-key
-          secret:
-            secretName: {{ .Values.secrets.sshKeySecret }}
-            defaultMode: 0400
         - name: gitops-repo
           emptyDir: {}
