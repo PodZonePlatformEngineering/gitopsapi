@@ -102,16 +102,16 @@ GITOPS_SKIP_INIT=1       # skip git clone on startup (repo already exists locall
 GITOPS_SKIP_PUSH=1       # skip git push (writes stay local)
 GITOPS_SKIP_GITHUB=1     # use LocalPRStore (file-backed) instead of GitHub API
 GITOPSGUI_DEV_ROLE=cluster_operator  # bypass OAuth2 proxy auth
-GITHUB_REPO=MoTTTT/cluster-charts    # used by GitHubService default constructor
-GITHUB_ORG=MoTTTT                    # org for per-cluster repo URL generation
+GITHUB_REPO=your-org/cluster-charts    # used by GitHubService default constructor
+GITHUB_ORG=your-org                    # org for per-cluster repo URL generation
 ```
 
 Additional variables used in production / E2E:
 
 ```bash
-GITOPS_REPO_URL=https://github.com/MoTTTT/cluster09.git  # management repo HTTPS URL
+GITOPS_REPO_URL=https://github.com/your-org/cluster-charts.git  # management repo HTTPS URL
 GITHUB_TOKEN=<PAT>                 # injected into HTTPS URLs for auth; also used by PyGitHub
-GITHUB_REPO=MoTTTT/cluster09      # default repo for GitHubService
+GITHUB_REPO=your-org/cluster-charts      # default repo for GitHubService
 MGMT_KUBECONFIG_SECRET=<yaml>     # base64-decoded kubeconfig written to /tmp/mgmt-kubeconfig
 GITOPS_REPOS_BASE=/tmp/gitops-repos  # base path for per-cluster repo clones
 ```

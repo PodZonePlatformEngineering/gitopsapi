@@ -16,7 +16,7 @@ from typing import Optional
 
 import git  # gitpython
 
-CATALOG_REPO_URL = os.environ.get("GITOPS_CATALOG_REPO_URL", "https://github.com/MoTTTT/gitopsapi-apps.git")
+CATALOG_REPO_URL = os.environ.get("GITOPS_CATALOG_REPO_URL", "")  # must be set explicitly; no default org
 REPO_URL = os.environ.get("GITOPS_REPO_URL", "")
 REPO_BRANCH = os.environ.get("GITOPS_BRANCH", "main")
 REPO_LOCAL_PATH = Path(os.environ.get("GITOPS_LOCAL_PATH", "/tmp/gitops-repo"))

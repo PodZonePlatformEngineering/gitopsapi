@@ -138,7 +138,7 @@ async def test_configure_repository_access_returns_response():
 
         result = await svc.configure_repository_access(
             "gitopsdev-infra",
-            GitAccessRequest(cluster="gitopsdev", git_url="git@github.com:MoTTTT/gitopsdev-infra.git"),
+            GitAccessRequest(cluster="gitopsdev", git_url="git@github.com:your-org/gitopsdev-infra.git"),
         )
 
     assert isinstance(result, GitAccessResponse)
@@ -165,7 +165,7 @@ async def test_configure_repository_access_uses_correct_cluster_context():
 
         await svc.configure_repository_access(
             "openclaw-apps",
-            GitAccessRequest(cluster="openclaw", git_url="git@github.com:MoTTTT/openclaw-apps.git"),
+            GitAccessRequest(cluster="openclaw", git_url="git@github.com:your-org/openclaw-apps.git"),
         )
 
     assert captured["cluster_context"] == "openclaw-admin@openclaw"

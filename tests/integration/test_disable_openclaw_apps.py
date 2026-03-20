@@ -39,7 +39,7 @@ def _make_svc() -> AppService:
     svc._git.push = AsyncMock()
     svc._gh = AsyncMock()
     svc._gh.create_pr = AsyncMock(
-        return_value="https://github.com/MoTTTT/cluster09/pull/999"
+        return_value="https://github.com/your-org/cluster-charts/pull/999"
     )
     # Wire read_file and write_file to the real filesystem via REPO_LOCAL_PATH patch
     async def _read_file(path: str) -> str:
@@ -119,7 +119,7 @@ async def test_disable_both_ollama_and_qdrant():
 async def test_disable_returns_pr_url():
     svc = _make_svc()
     result = await svc.disable_application("ollama", "openclaw")
-    assert result.pr_url == "https://github.com/MoTTTT/cluster09/pull/999"
+    assert result.pr_url == "https://github.com/your-org/cluster-charts/pull/999"
 
 
 async def test_file_is_restored_after_test(backup_apps_file):

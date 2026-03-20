@@ -1,26 +1,23 @@
 image:
-  repository: harbor.podzone.cloud/gitopsapi/gitopsapi
-  tag: "latest"
+  repository: ghcr.io/motttt/gitopsapi
+  tag: "v0.1.6"
   pullPolicy: IfNotPresent
 
 gitops:
-  repoUrl: "git@github.com:MoTTTT/cluster09.git"
+  repoUrl: "https://github.com/<your-org>/cluster-charts.git"
   branch: main
-  githubRepo: "MoTTTT/cluster09"
+  githubRepo: "<your-org>/cluster-charts"
+  githubOrg: "<your-org>"
+  catalogRepoUrl: "https://github.com/<your-org>/gitopsapi-apps.git"
 
 secrets:
-  sshKeySecret: gitopsapi-ssh-key
   githubTokenSecret: gitopsapi-github-token
   mgmtKubeconfigSecret: gitopsapi-mgmt-kubeconfig
   ageKeySecret: gitopsapi-age-key
 
 expose:
-  hostname: gitopsgui.podzone.cloud
-  gatewayName: gateway
-  gatewayNamespace: kube-system
-  tlsSecretName: gitopsgui-tls
-
-externalURL: https://gitopsgui.podzone.cloud
+  hostname: gitopsapi.<your-domain>
+  tlsSecretName: gitopsapi-tls
 
 resources:
   requests:

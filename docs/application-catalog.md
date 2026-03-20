@@ -14,7 +14,7 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 ### gitopsapi
 
 **Description**: GitOps platform API — manages application lifecycle, cluster configuration, change pipelines, and promotion across dev/ETE/prod.
-**GitHub**: <https://github.com/MoTTTT/gitopsapi>
+**GitHub**: <https://github.com/PodZone/gitopsapi>
 **Web**: <https://motttt.github.io/gitopsapi>
 **Category**: Platform Management, Internal Tooling
 
@@ -25,7 +25,7 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 | chart | gitopsapi |
 | chartVersion | 0.1.2 |
 | namespace | gitopsapi |
-| applicationRepo | <https://github.com/MoTTTT/gitopsapi> |
+| applicationRepo | <https://github.com/PodZone/gitopsapi> |
 | valuesFile | gitopsapi-values ConfigMap |
 
 ---
@@ -33,7 +33,7 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 ### gitopsgui
 
 **Description**: GitOps platform GUI — React frontend for GitOpsAPI. Provides approval workflows, pipeline visualisation, cluster and application management.
-**GitHub**: ⚠️ RECOMMENDED: <https://github.com/MoTTTT/gitopsgui> (confirm)
+**GitHub**: ⚠️ RECOMMENDED: <https://github.com/PodZone/gitopsgui> (confirm)
 **Web**: ⚠️ RECOMMENDED: <https://gui.podzone.cloud> (confirm)
 **Category**: Platform Management, Internal Tooling
 
@@ -44,7 +44,7 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 | chart | ⚠️ RECOMMENDED: gitopsgui |
 | chartVersion | ⚠️ RECOMMENDED: 0.1.0 |
 | namespace | gitopsgui |
-| applicationRepo | ⚠️ RECOMMENDED: <https://github.com/MoTTTT/gitopsgui> |
+| applicationRepo | ⚠️ RECOMMENDED: <https://github.com/PodZone/gitopsgui> |
 
 ---
 
@@ -280,7 +280,7 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 ### podzone-mpc
 
 **Description**: Podzone MCP context server — Qdrant-backed semantic search for agent context management. Exposes `context-store`, `context-find`, and `context-seed` tools via MCP protocol (SSE transport for cluster deployment, stdio for local Claude Code use).
-**GitHub**: <https://github.com/MoTTTT/podzone-mpc>
+**GitHub**: <https://github.com/PodZone/podzone-mpc>
 **Web**: n/a (internal service)
 **Category**: AI/ML Infrastructure, Platform Management
 
@@ -291,7 +291,7 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 | chart | podzone-mpc |
 | chartVersion | 0.1.0 |
 | namespace | podzone-mpc |
-| applicationRepo | <https://github.com/MoTTTT/podzone-mpc> |
+| applicationRepo | <https://github.com/PodZone/podzone-mpc> |
 | image | ghcr.io/motttt/podzone-mpc:v0.1.0 |
 
 **Dependencies**: Qdrant (in-cluster, `qdrant.qdrant.svc.cluster.local:6333`), Ollama (`ollama.ollama.svc.cluster.local:11434`), model `nomic-embed-text`
@@ -444,7 +444,7 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 | chart | ⚠️ RECOMMENDED: telegram-bot |
 | chartVersion | ⚠️ RECOMMENDED: 0.1.0 |
 | namespace | telegram-bot |
-| applicationRepo | ⚠️ RECOMMENDED: <https://github.com/MoTTTT/telegram-bot> (new) |
+| applicationRepo | ⚠️ RECOMMENDED: <https://github.com/PodZone/telegram-bot> (new) |
 
 **Note**: This is a net-new product, not a third-party chart. Requires design and implementation.
 

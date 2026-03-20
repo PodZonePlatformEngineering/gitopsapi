@@ -90,7 +90,7 @@ Configure the GitOps repository and GitHub organisation via Helm values:
 ```yaml
 # my-values.yaml
 gitops:
-  catalogRepoUrl: "https://github.com/<your-org>/gitopsapi-apps.git"  # read-only catalog (default: MoTTTT/gitopsapi-apps)
+  catalogRepoUrl: "https://github.com/<your-org>/gitopsapi-apps.git"  # read-only catalog; required if using application catalog
   repoUrl: "https://github.com/<your-org>/<your-mgmt-repo>.git"       # writable management repo
   githubOrg: "<your-org>"
   githubRepo: "<your-mgmt-repo>"

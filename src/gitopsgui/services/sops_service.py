@@ -10,7 +10,7 @@ Automates cluster SOPS key provisioning:
 
 Environment variables:
   MANAGEMENT_SOPS_PUBLIC_KEY   — management cluster SOPS age public key (required)
-  GITHUB_ORG                   — GitHub org owning the repos (default: MoTTTT)
+  GITHUB_ORG                   — GitHub org owning the repos (required; no default)
   GITOPS_SKIP_AGE=1            — skip age subprocess calls; use stub keys (dev/test)
   GITOPS_SKIP_K8S=1            — skip K8s Secret creation (dev/test)
   GITOPS_SKIP_PUSH=1           — skip git push (dev/test)
@@ -29,7 +29,7 @@ from ..models.sops import SOPSBootstrapRequest, SOPSBootstrapResponse
 from .git_service import GitService
 
 MANAGEMENT_SOPS_PUBLIC_KEY = os.environ.get("MANAGEMENT_SOPS_PUBLIC_KEY", "")
-GITHUB_ORG = os.environ.get("GITHUB_ORG", "MoTTTT")
+GITHUB_ORG = os.environ.get("GITHUB_ORG", "")  # required; set GITHUB_ORG in deployment
 SKIP_AGE = os.environ.get("GITOPS_SKIP_AGE", "") == "1"
 SKIP_K8S = os.environ.get("GITOPS_SKIP_K8S", "") == "1"
 

@@ -27,7 +27,7 @@ spec:
             - containerPort: 8000
           env:
             - name: GITOPS_CATALOG_REPO_URL
-              value: {{ .Values.gitops.catalogRepoUrl | default "https://github.com/MoTTTT/gitopsapi-apps.git" | quote }}
+              value: {{ .Values.gitops.catalogRepoUrl | quote }}
             - name: GITOPS_REPO_URL
               value: {{ .Values.gitops.repoUrl | quote }}
             - name: GITOPS_BRANCH

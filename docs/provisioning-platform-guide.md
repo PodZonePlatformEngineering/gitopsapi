@@ -46,7 +46,7 @@ The management repo holds cluster-chart values at `gitops/cluster-charts/{name}/
 
 ### Cluster-chart Helm chart
 
-The `cluster-chart` Helm chart generates CAPI manifests from the values written by GitOpsAPI. It must be published and accessible from the management cluster. Source: [podzone-infrastructure](https://github.com/MoTTTT/podzone-infrastructure).
+The `cluster-chart` Helm chart generates CAPI manifests from the values written by GitOpsAPI. It must be published and accessible from the management cluster. Source: [podzone-infrastructure](https://github.com/PodZone/podzone-infrastructure).
 
 ---
 

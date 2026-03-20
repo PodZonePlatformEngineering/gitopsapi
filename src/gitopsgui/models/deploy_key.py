@@ -7,7 +7,7 @@ from pydantic import BaseModel
 class GitAccessRequest(BaseModel):
     """Request to configure Git deploy-key access for a repository."""
     cluster: str       # Target cluster context name (e.g. "gitopsdev")
-    git_url: str       # SSH clone URL (e.g. git@github.com:MoTTTT/gitopsdev-infra.git)
+    git_url: str       # SSH clone URL (e.g. git@github.com:your-org/gitopsdev-infra.git)
 
 
 class GitAccessResponse(BaseModel):

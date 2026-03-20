@@ -24,7 +24,7 @@ helm install gitopsapi gitopsapi/gitopsapi \
 
 ## GitHub Pages Setup (One-Time)
 
-1. Go to: https://github.com/MoTTTT/gitopsapi/settings/pages
+1. Go to: [github.com/PodZone/gitopsapi/settings/pages](https://github.com/PodZone/gitopsapi/settings/pages)
 2. **Source:** Deploy from a branch
 3. **Branch:** main
 4. **Folder:** /docs

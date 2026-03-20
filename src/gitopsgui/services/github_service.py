@@ -198,7 +198,7 @@ def _map_pr(pr: GHPullRequest) -> PRDetail:
     )
 
 
-GITHUB_ORG = os.environ.get("GITHUB_ORG", "")  # e.g. "MoTTTT"
+GITHUB_ORG = os.environ.get("GITHUB_ORG", "")  # e.g. "your-org"
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +210,7 @@ class GitHubService:
         """Create a GitHubService targeting a specific repo.
 
         repo_name: "owner/repo" string. Defaults to GITHUB_REPO env var.
-        Per-cluster instances pass e.g. "MoTTTT/security-apps".
+        Per-cluster instances pass e.g. "your-org/security-apps".
         """
         self._repo_name = repo_name or GITHUB_REPO
 

@@ -12,7 +12,7 @@
     "memory_gb_per_node": 16,
     "boot_volume_gb": 50
   },
-  "gitops_repo_url": "git@github.com:MoTTTT/cluster09.git",
+  "gitops_repo_url": "git@github.com:your-org/cluster-charts.git",
   "sops_secret_ref": "gitopsapi-age-key",
   "bastion": null
 }
