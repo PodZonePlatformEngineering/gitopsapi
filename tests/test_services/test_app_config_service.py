@@ -235,6 +235,26 @@ async def test_create_no_values_override_skips_values_file():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
+async def test_create_raises_409_when_already_assigned():
+    from fastapi import HTTPException
+
+    spec = _SPEC.model_copy(update={"values_override": ""})
+    svc = _svc()
+    # keycloak is already present in _APPS_YAML
+    svc._git.read_file = AsyncMock(return_value=_APPS_YAML)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await svc.create(spec)
+
+    assert exc_info.value.status_code == 409
+    assert "already assigned" in exc_info.value.detail
+
+
+# ---------------------------------------------------------------------------
+# service: delete
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
 async def test_delete_removes_block():
     svc = _svc()
     svc._git.read_file = AsyncMock(return_value=_APPS_YAML)

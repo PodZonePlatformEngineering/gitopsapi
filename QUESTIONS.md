@@ -38,6 +38,43 @@
 
 ## Active Questions
 
+## [CC-079] gitopsdev kubeconfig + API status (2026-03-20)
+
+**Status**: ✅ Resolved — kubeconfig refreshed, API healthy
+
+**Resolution**:
+
+- gitopsdev was rebuilt 2026-03-19; new CA/certs issued; CAPI kubeconfig secret not updated automatically
+- Fix: extracted new CA from `gitopsdev-ca` CAPI secret, replaced gitopsdev entry in `~/.kube/config`
+- `gitopsapi` running: chart 0.1.3, image `ghcr.io/motttt/gitopsapi:v0.1.6`, pod Ready
+- Live API confirmed via port-forward: auth check passes, `GET /api/v1/clusters` returns `[]` (expected — CC-055 gap)
+
+**Remaining blocker for live HTTP access (freyr:8081)**:
+
+Gateway API not yet deployed to gitopsdev — PROJ-007/T-002 (Cluster Operator action required).
+Once deployed, the existing HTTPRoute (`gitopsgui.podzone.cloud`) will attach and the API will be reachable.
+
+**New gap identified — PROJ-003 backlog**:
+
+`GET /api/v1/clusters/{name}/kubeconfig` endpoint needed. After cluster provisioning, operators must
+manually extract the kubeconfig from the CAPI secret on the management cluster. An API endpoint would:
+
+1. Pull `{cluster}-kubeconfig` secret from management cluster
+2. Rewrite `server:` to the bastion address (`https://freyr:{bastion_port}`)
+3. Return the kubeconfig for download
+
+**Action required**:
+
+Refresh the kubeconfig for gitopsdev:
+
+```bash
+talosctl kubeconfig --nodes 192.168.4.120 --endpoints 192.168.4.120 --force -n gitopsdev
+```
+
+(Or re-export from Talos and update `~/.kube/config`.)
+
+---
+
 ## [CC-078] Deployment status — manual action required (2026-03-19)
 
 **Status**: Blocked on ghcr.io package visibility

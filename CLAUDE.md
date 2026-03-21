@@ -9,7 +9,7 @@ Escalate to Team Lead via `podzoneAgentTeam/agents/team-lead/incoming/YYYY-MM-DD
 
 ## Commands
 ```
-.venv/bin/pytest -q --tb=short      # run all tests (177 passing as of v0.1.5)
+.venv/bin/pytest -q --tb=short      # run all tests (252 passing as of v0.1.6)
 .venv/bin/pytest -q --tb=short tests/test_services/test_app_service.py   # single module
 ```
 

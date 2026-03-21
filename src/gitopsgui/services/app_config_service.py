@@ -228,17 +228,25 @@ class AppConfigService:
         return results
 
     async def create(self, spec: ApplicationClusterConfig) -> ApplicationClusterConfigResponse:
+        from fastapi import HTTPException
+
         infra_git = self._infra_git(spec.cluster_id)
         infra_gh = self._infra_gh(spec.cluster_id)
-
-        branch = f"app-config/assign-{spec.app_id}-{spec.cluster_id}-{uuid.uuid4().hex[:8]}"
-        await infra_git.create_branch(branch)
 
         apps_path = _cluster_apps_path(spec.cluster_id)
         try:
             existing = await infra_git.read_file(apps_path)
         except FileNotFoundError:
             existing = ""
+
+        if existing and _find_kustomization_block(existing, spec.app_id):
+            raise HTTPException(
+                status_code=409,
+                detail=f"{spec.app_id!r} is already assigned to {spec.cluster_id!r}. Use PATCH to update.",
+            )
+
+        branch = f"app-config/assign-{spec.app_id}-{spec.cluster_id}-{uuid.uuid4().hex[:8]}"
+        await infra_git.create_branch(branch)
 
         new_entry = _render_kustomization_entry(spec)
         updated = existing.rstrip("\n") + "\n" + new_entry if existing.strip() else new_entry

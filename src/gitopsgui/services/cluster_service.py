@@ -25,7 +25,7 @@ from .github_service import GitHubService
 
 _CLUSTER_CHARTS_BASE = "gitops/cluster-charts"
 _CLUSTERS_BASE = "clusters"
-_MGMT_CLUSTERS_PATH = "clusters/ManagementCluster/clusters.yaml"
+_MGMT_CLUSTERS_PATH = "clusters/management/clusters.yaml"
 
 # Reviewers determined by target (cluster changes always need cluster_operator approval)
 _CLUSTER_REVIEWERS: List[str] = []  # populated from env/config at runtime
