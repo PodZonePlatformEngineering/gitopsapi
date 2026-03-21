@@ -1,0 +1,17 @@
+{
+  "_comment": "POST /api/v1/application-configs — Ollama LLM server on agentsonly cluster (CC-059/CC-080)",
+  "_curl": "curl -s -X POST -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @application-configs/ollama-agentsonly.json http://localhost:8000/api/v1/application-configs",
+  "_schema_review": {
+    "app_id": "str — matches application name ('ollama')",
+    "cluster_id": "str — target cluster ('agentsonly')",
+    "enabled": "bool — true = active deployment",
+    "values_override": "str — per-cluster values override (empty = use application-level values_yaml)",
+    "external_hosts": "list[str] — external hostnames; ollama.podzone.cloud will be routed here after DNS cut-over from openclaw"
+  },
+  "_note": "OLLAMA_API_KEY is injected via K8s secret 'ollama-api-key' in the HelmRelease (CC-080 Option B). DNS cut-over for ollama.podzone.cloud is a separate step — see agentsonly-infra CLAUDE.md.",
+  "app_id": "ollama",
+  "cluster_id": "agentsonly",
+  "enabled": true,
+  "values_override": "",
+  "external_hosts": ["ollama.podzone.cloud"]
+}
