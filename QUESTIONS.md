@@ -38,6 +38,41 @@
 
 ## Active Questions
 
+## [PROJ-007/T-010] openclaw decommission — PRs raised, action needed (2026-03-21)
+
+**Status**: Two PRs raised — merge in order
+
+**Work done this session**:
+
+- Identified that the prior decommission (cluster09 PR #17, 2026-03-18) removed files from the wrong repo
+- The active `openclaw-cluster` Kustomization is managed from `management-infra` and reads from `cluster-charts`
+- Raised correct PRs:
+  1. `MoTTTT/management-infra` PR #6 — removes `openclaw-cluster` from `clusters/management/clusters.yaml`
+  2. `MoTTTT/cluster-charts` PR #5 — removes `gitops/cluster-charts/openclaw/` files
+- `openclaw-infra` + `openclaw-apps` already archived ✅
+
+**Merge order (action required)**:
+
+1. Merge **management-infra PR #6** first → Flux prunes `openclaw-cluster` Kustomization → CAPMOX deletes VMs
+2. Verify VMs gone on venus Proxmox
+3. Merge **cluster-charts PR #5** → clean up chart files
+
+**Additional cleanup needed after merge**:
+
+- Remove iptables PREROUTING rule on freyr: `iptables -t nat -D PREROUTING -p tcp --dport 6447 -j DNAT --to-destination 192.168.4.150:6443`
+- Update DNS: `qdrant.podzone.cloud` + `ollama.podzone.cloud` → agentsonly Gateway IP (currently unreachable at 192.168.1.80:6448)
+- Fix agentsonly iptables: port 6448 should map to agentsonly (192.168.4.160:6443)
+
+**Known gap — ClusterService uses wrong repo**:
+
+The `ClusterService.decommission_cluster()` writes to `GITOPS_REPO_URL` (management infra repo) only.
+Cluster-chart files live in `MoTTTT/cluster-charts` (a separate repo). The service needs to be updated
+to write cluster-chart files to `cluster-charts` and Kustomization entries to management-infra.
+This gap was masked because the decommission PR #17 wrote to `cluster09` (another wrong repo).
+Flag as a bug: ClusterService needs a second git/gh client for the cluster-charts repo.
+
+---
+
 ## [CC-079] gitopsdev kubeconfig + API status (2026-03-20)
 
 **Status**: ✅ Resolved — kubeconfig refreshed, API healthy
