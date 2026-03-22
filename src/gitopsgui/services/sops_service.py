@@ -5,14 +5,16 @@ Automates cluster SOPS key provisioning:
 1. Generate SOPS age key pair (age-keygen)
 2. Encrypt private key with management cluster's SOPS public key (age)
 3. Commit encrypted key to management-infra/sops-keys/{cluster}.agekey.enc
-4. Install private key as sops-age Secret in target cluster flux-system namespace
-5. Write .sops.yaml to {cluster}-infra repo referencing cluster's public key
+4. Open PR on management-infra for the encrypted key commit
+5. Install private key as sops-age Secret in target cluster flux-system namespace
+   (uses kubeconfig extracted from CAPI management cluster — no local kubeconfig required)
+6. Write .sops.yaml to {cluster}-infra repo referencing cluster's public key
 
 Environment variables:
   MANAGEMENT_SOPS_PUBLIC_KEY   — management cluster SOPS age public key (required)
   GITHUB_ORG                   — GitHub org owning the repos (required; no default)
   GITOPS_SKIP_AGE=1            — skip age subprocess calls; use stub keys (dev/test)
-  GITOPS_SKIP_K8S=1            — skip K8s Secret creation (dev/test)
+  GITOPS_SKIP_K8S=1            — skip K8s Secret creation and kubeconfig extraction (dev/test)
   GITOPS_SKIP_PUSH=1           — skip git push (dev/test)
 """
 
@@ -22,17 +24,18 @@ import subprocess
 import uuid
 from typing import Optional
 
+import yaml
 from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
 
 from ..models.sops import SOPSBootstrapRequest, SOPSBootstrapResponse
 from .git_service import GitService
+from .github_service import GitHubService, GITHUB_ORG
+from . import repo_router
 
 MANAGEMENT_SOPS_PUBLIC_KEY = os.environ.get("MANAGEMENT_SOPS_PUBLIC_KEY", "")
-GITHUB_ORG = os.environ.get("GITHUB_ORG", "")  # required; set GITHUB_ORG in deployment
 SKIP_AGE = os.environ.get("GITOPS_SKIP_AGE", "") == "1"
 SKIP_K8S = os.environ.get("GITOPS_SKIP_K8S", "") == "1"
-
 
 _SOPS_YAML_TEMPLATE = """\
 creation_rules:
@@ -41,6 +44,8 @@ creation_rules:
     age: >-
       {public_key}
 """
+
+_MGMT_INFRA_REPO = "management-infra"
 
 
 # ---------------------------------------------------------------------------
@@ -94,11 +99,16 @@ def _encrypt_with_management_key(private_key: str, mgmt_public_key: str) -> str:
     return result.stdout
 
 
-def _install_sops_secret(cluster_context: str, private_key: str) -> None:
-    """Upsert sops-age Secret in flux-system namespace of the target cluster."""
+def _install_sops_secret(kubeconfig_dict: dict, private_key: str) -> None:
+    """Upsert sops-age Secret in flux-system namespace of the target cluster.
+
+    Uses an in-memory kubeconfig dict (extracted from CAPI management cluster secret)
+    so this works when gitopsapi is running in-cluster with no local ~/.kube/config.
+    Pass an empty dict when SKIP_K8S=1 (the function returns immediately).
+    """
     if SKIP_K8S:
         return
-    config.load_kube_config(context=cluster_context)
+    config.load_kube_config_from_dict(kubeconfig_dict)
     v1 = client.CoreV1Api()
     secret = client.V1Secret(
         metadata=client.V1ObjectMeta(name="sops-age", namespace="flux-system"),
@@ -123,38 +133,45 @@ class SOPSService:
     def __init__(self):
         self._mgmt_git: Optional[GitService] = None
         self._cluster_infra_git: Optional[GitService] = None
+        self._gh_mgmt: Optional[GitHubService] = None  # injectable for tests
 
     def _get_mgmt_git(self) -> GitService:
-        """Return GitService targeting management-infra repo."""
+        """Return GitService targeting management-infra repo (HTTPS)."""
         if self._mgmt_git:
             return self._mgmt_git
         return GitService(
-            repo_url=f"git@github.com:{GITHUB_ORG}/management-infra.git",
+            repo_url=f"https://github.com/{GITHUB_ORG}/{_MGMT_INFRA_REPO}.git",
             local_path=None,
         )
 
     def _get_cluster_infra_git(self, cluster_name: str) -> GitService:
-        """Return GitService targeting {cluster}-infra repo."""
+        """Return GitService targeting {cluster}-infra repo (HTTPS via repo_router)."""
         if self._cluster_infra_git:
             return self._cluster_infra_git
         return GitService(
-            repo_url=f"git@github.com:{GITHUB_ORG}/{cluster_name}-infra.git",
+            repo_url=repo_router.infra_repo_url(cluster_name),
             local_path=None,
         )
+
+    def _get_gh_mgmt(self) -> GitHubService:
+        """Return GitHubService targeting management-infra."""
+        if self._gh_mgmt:
+            return self._gh_mgmt
+        return GitHubService(repo_name=f"{GITHUB_ORG}/{_MGMT_INFRA_REPO}")
 
     async def sops_bootstrap(
         self,
         cluster_name: str,
         request: SOPSBootstrapRequest,
     ) -> SOPSBootstrapResponse:
-        """Orchestrate SOPS key generation → encryption → storage → cluster install → .sops.yaml.
+        """Orchestrate SOPS key generation → encryption → management-infra PR → cluster install → .sops.yaml.
 
         Args:
             cluster_name: Name of the cluster (e.g. "gitopsdev").
             request:       SOPSBootstrapRequest; optionally overrides management SOPS public key.
 
         Returns:
-            SOPSBootstrapResponse with SOPS public key and operation status.
+            SOPSBootstrapResponse with SOPS public key, operation status, and management-infra PR URL.
 
         Raises:
             ValueError:   MANAGEMENT_SOPS_PUBLIC_KEY not configured and no override provided.
@@ -167,7 +184,6 @@ class SOPSService:
                 "Set the env var or provide management_sops_public_key in the request."
             )
 
-        cluster_context = f"{cluster_name}-admin@{cluster_name}"
         branch = f"sops-bootstrap-{cluster_name}-{uuid.uuid4().hex[:8]}"
         encrypted_path = f"sops-keys/{cluster_name}.agekey.enc"
 
@@ -189,10 +205,41 @@ class SOPSService:
         await mgmt_git.push()
         await mgmt_git.checkout_main()
 
-        # 4. Install SOPS private key as sops-age Secret in target cluster
-        await asyncio.to_thread(_install_sops_secret, cluster_context, sops_key.private_key)
+        # 4. Open PR on management-infra for the encrypted key commit
+        gh_mgmt = self._get_gh_mgmt()
+        mgmt_pr_url = await gh_mgmt.create_pr(
+            branch=branch,
+            title=f"Add SOPS key for {cluster_name} (TR-SOPS-002)",
+            body=(
+                f"Adds encrypted SOPS age key for `{cluster_name}` at "
+                f"`{encrypted_path}`.\n\n"
+                f"**Effect on merge**: Flux can decrypt SOPS-encrypted secrets "
+                f"in `{cluster_name}-infra` once the `sops-age` Secret is also "
+                f"present in the cluster's `flux-system` namespace (applied by "
+                f"this bootstrap operation).\n\n"
+                f"TR-SOPS-002"
+            ),
+            labels=["cluster", "stage:production"],
+            reviewers=[],
+        )
 
-        # 5. Write .sops.yaml to {cluster}-infra repo
+        # 5. Install SOPS private key as sops-age Secret in target cluster.
+        #    Kubeconfig is fetched in-memory from the CAPI management cluster secret
+        #    (no local ~/.kube/config required — works when running in-cluster).
+        if not SKIP_K8S:
+            from .kubeconfig_service import KubeconfigService, rewrite_kubeconfig_server
+            from .cluster_service import ClusterService
+            kubeconfig_yaml = await KubeconfigService().extract_kubeconfig(cluster_name)
+            cluster_info = await ClusterService().get_cluster(cluster_name)
+            if cluster_info and cluster_info.spec.bastion:
+                b = cluster_info.spec.bastion
+                kubeconfig_yaml = rewrite_kubeconfig_server(
+                    kubeconfig_yaml, b.ip, b.api_port
+                )
+            kubeconfig_dict = yaml.safe_load(kubeconfig_yaml)
+            await asyncio.to_thread(_install_sops_secret, kubeconfig_dict, sops_key.private_key)
+
+        # 6. Write .sops.yaml to {cluster}-infra repo
         sops_yaml = _SOPS_YAML_TEMPLATE.format(public_key=sops_key.public_key)
         cluster_git = self._get_cluster_infra_git(cluster_name)
         await cluster_git.create_branch(branch)
@@ -207,4 +254,5 @@ class SOPSService:
             encrypted_key_path=encrypted_path,
             secret_created=not SKIP_K8S,
             sops_yaml_committed=True,
+            mgmt_pr_url=mgmt_pr_url,
         )

@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from typing import List
 
-from ...models.cluster import ClusterSpec, ClusterResponse, ClusterSuspendResponse, ClusterDecommissionResponse
+from ...models.cluster import ClusterSpec, ClusterResponse, ClusterSuspendResponse, ClusterDecommissionResponse, IngressConnectorResponse
+from ...models.deploy_key import ClusterBootstrapRequest, ClusterBootstrapResponse
 from ...models.sops import SOPSBootstrapRequest, SOPSBootstrapResponse
 from ...services.cluster_service import ClusterService
 from ...services.kubeconfig_service import KubeconfigService
@@ -96,6 +97,61 @@ async def decommission_cluster(
         return await svc.decommission_cluster(name)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/clusters/{name}/bootstrap",
+    response_model=ClusterBootstrapResponse,
+    status_code=202,
+    summary="Bootstrap a provisioned cluster: SOPS key + SSH deploy keys (CC-053b)",
+)
+async def bootstrap_cluster(
+    name: str,
+    request: ClusterBootstrapRequest,
+    _=require_role("cluster_operator"),
+):
+    """Install SOPS age key and SSH deploy keys on a newly provisioned cluster.
+
+    Requires the cluster to be running and reachable via the CAPI management cluster
+    (MGMT_KUBECONFIG_SECRET must be configured). Call this after CAPI has finished
+    provisioning the cluster and its API is available.
+
+    Installs in flux-system on the target cluster:
+    - sops-age Secret (for SOPS decryption by Flux)
+    - flux-{cluster}-infra-key Secret + GitRepository CR
+    - flux-{cluster}-apps-key Secret + GitRepository CR
+
+    Also opens a PR on management-infra for the encrypted SOPS key commit.
+    """
+    svc = ClusterService()
+    try:
+        return await svc.bootstrap_cluster(name, request)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/clusters/{name}/gateway",
+    response_model=IngressConnectorResponse,
+    status_code=202,
+    summary="Wire cloudflared ingress connector for a cluster (CC-068)",
+)
+async def wire_ingress_connector(
+    name: str,
+    _=require_role("cluster_operator"),
+):
+    """Renders cloudflared HelmRelease into {name}-apps and Flux Kustomization into {name}-infra.
+
+    The cluster spec must have ingress_connector.enabled=true set before calling this endpoint.
+    Opens two PRs: one per repo. Merge apps PR first, then infra PR.
+    """
+    svc = ClusterService()
+    try:
+        return await svc.wire_ingress_connector(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post(

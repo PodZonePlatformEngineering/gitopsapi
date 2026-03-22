@@ -2,6 +2,22 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 
 
+class TokenSecretRef(BaseModel):
+    name: str
+    key: str = "token"
+
+
+class IngressConnectorSpec(BaseModel):
+    enabled: bool = True
+    type: str = "cloudflare-tunnel"       # only "cloudflare-tunnel" supported
+    tunnel_id: Optional[str] = None       # Cloudflare Tunnel UUID (informational; used in Phase 2 API calls)
+    replicas: int = 2
+    namespace: str = "cloudflared"
+    token_secret_ref: TokenSecretRef = Field(
+        default_factory=lambda: TokenSecretRef(name="cloudflare-tunnel-token")
+    )
+
+
 class ClusterDimensions(BaseModel):
     control_plane_count: int = 3
     worker_count: int = 3
@@ -46,6 +62,7 @@ class ClusterSpec(BaseModel):
     bastion: Optional[BastionSpec] = None  # if set, kubeconfig server URL is rewritten to bastion
     allow_scheduling_on_control_planes: bool = False  # enables Talos allowSchedulingOnControlPlanes; required when worker_count=0
     external_hosts: List[str] = []  # FQDNs served externally via this cluster's Gateway; drives cert-manager certs + Gateway listeners at provisioning time
+    ingress_connector: Optional[IngressConnectorSpec] = None  # CC-068: cloudflared tunnel connector config
 
 
 class ClusterSuspendResponse(BaseModel):
@@ -57,6 +74,12 @@ class ClusterDecommissionResponse(BaseModel):
     name: str
     pr_url: str
     archived_repos: List[str]
+
+
+class IngressConnectorResponse(BaseModel):
+    name: str
+    apps_pr_url: str
+    infra_pr_url: str
 
 
 class ClusterStatus(BaseModel):

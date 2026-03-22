@@ -1,0 +1,21 @@
+{
+  "_comment": "POST /api/v1/applications — podzone-mpc MCP context server on agentsonly (CC-059). Provides Qdrant-backed semantic search for agent context management via MCP SSE transport.",
+  "_curl": "curl -s -X POST -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @applications/podzone-mpc-agentsonly.json http://localhost:8000/api/v1/applications",
+  "_schema_review": {
+    "name": "str — application name, used as namespace + HelmRelease name",
+    "cluster": "str — target cluster; routes to agentsonly-apps and agentsonly-infra repos",
+    "helm_repo_url": "str — Helm chart repo (GitHub Pages for MoTTTT/podzone-mpc)",
+    "chart_name": "str — chart name within the repo",
+    "chart_version": "str — 0.1.0 (initial release)",
+    "values_yaml": "str — inline values; sets Qdrant + Ollama service URLs and collection name",
+    "app_repo_url": "Optional[str] — GitHub repo for the MCP server source"
+  },
+  "_note": "Requires ghcr-regcred pull secret in podzone-mpc namespace. Depends on qdrant and ollama being Ready. Collection 'agentsonly' must be seeded separately via context-seed MCP tool.",
+  "name": "podzone-mpc",
+  "cluster": "agentsonly",
+  "helm_repo_url": "https://motttt.github.io/podzone-mpc",
+  "chart_name": "podzone-mpc",
+  "chart_version": "0.1.0",
+  "app_repo_url": "https://github.com/MoTTTT/podzone-mpc",
+  "values_yaml": "imagePullSecrets:\n  - name: ghcr-regcred\n\nenv:\n  qdrantUrl: \"http://qdrant.qdrant.svc.cluster.local:6333\"\n  ollamaUrl: \"http://ollama.ollama.svc.cluster.local:11434\"\n  ollamaEmbedModel: \"nomic-embed-text\"\n  qdrantCollection: \"agentsonly\"\n"
+}

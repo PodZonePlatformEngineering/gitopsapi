@@ -5,6 +5,7 @@ Automates:
 1. SSH ed25519 deploy key pair generation (ssh-keygen)
 2. Public key upload to GitHub repo (via GitHubService)
 3. Private key storage as K8s Secret in flux-system namespace
+   (uses in-memory kubeconfig dict from CAPI — no local kubeconfig required)
 4. Flux GitRepository CR creation referencing the Secret
 
 Environment variables:
@@ -18,6 +19,7 @@ import subprocess
 import tempfile
 from typing import Optional
 
+import yaml
 from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
 
@@ -62,14 +64,18 @@ def _get_known_hosts() -> str:
     return result.stdout
 
 
-def _load_k8s(cluster_context: str) -> tuple[client.CoreV1Api, client.CustomObjectsApi]:
-    """Load kubeconfig for the named cluster context; return CoreV1Api and CustomObjectsApi."""
-    config.load_kube_config(context=cluster_context)
+def _load_k8s(kubeconfig_dict: dict) -> tuple[client.CoreV1Api, client.CustomObjectsApi]:
+    """Load kubeconfig from in-memory dict; return CoreV1Api and CustomObjectsApi.
+
+    Uses load_kube_config_from_dict so no local ~/.kube/config is required
+    — works when gitopsapi is running in-cluster.
+    """
+    config.load_kube_config_from_dict(kubeconfig_dict)
     return client.CoreV1Api(), client.CustomObjectsApi()
 
 
 def _create_deploy_key_secret(
-    cluster_context: str,
+    kubeconfig_dict: dict,
     repo_name: str,
     private_key: str,
 ) -> None:
@@ -77,7 +83,7 @@ def _create_deploy_key_secret(
     if SKIP_K8S:
         return
     known_hosts = _get_known_hosts()
-    v1, _ = _load_k8s(cluster_context)
+    v1, _ = _load_k8s(kubeconfig_dict)
     secret_name = f"flux-{repo_name}-key"
     secret = client.V1Secret(
         metadata=client.V1ObjectMeta(name=secret_name, namespace="flux-system"),
@@ -93,7 +99,7 @@ def _create_deploy_key_secret(
 
 
 def _create_flux_gitrepository(
-    cluster_context: str,
+    kubeconfig_dict: dict,
     repo_name: str,
     git_url: str,
     secret_name: str,
@@ -101,7 +107,7 @@ def _create_flux_gitrepository(
     """Upsert a Flux GitRepository CR in flux-system namespace."""
     if SKIP_K8S:
         return
-    _, custom = _load_k8s(cluster_context)
+    _, custom = _load_k8s(kubeconfig_dict)
     cr = {
         "apiVersion": "source.toolkit.fluxcd.io/v1",
         "kind": "GitRepository",
@@ -152,17 +158,37 @@ class DeployKeyService:
         self,
         repo_name: str,
         request: GitAccessRequest,
+        kubeconfig_dict: Optional[dict] = None,
     ) -> GitAccessResponse:
         """Orchestrate deploy key generation → GitHub upload → K8s Secret → Flux GitRepository.
 
         Args:
-            repo_name: Repository name (without owner prefix).
-            request:   GitAccessRequest with cluster context and SSH git URL.
+            repo_name:       Repository name (without owner prefix).
+            request:         GitAccessRequest with cluster name and SSH git URL.
+            kubeconfig_dict: In-memory kubeconfig parsed from CAPI management secret.
+                             If None and SKIP_K8S=False, kubeconfig is fetched automatically
+                             from the CAPI management cluster using request.cluster.
 
         Returns:
             GitAccessResponse with key ID, secret name, and CR creation status.
         """
-        cluster_context = f"{request.cluster}-admin@{request.cluster}"
+        # Resolve kubeconfig: caller may inject it (e.g. from bootstrap_cluster),
+        # or we fetch it here when called standalone.
+        kube_dict: dict = {}
+        if not SKIP_K8S:
+            if kubeconfig_dict is not None:
+                kube_dict = kubeconfig_dict
+            else:
+                from .kubeconfig_service import KubeconfigService, rewrite_kubeconfig_server
+                from .cluster_service import ClusterService
+                kubeconfig_yaml = await KubeconfigService().extract_kubeconfig(request.cluster)
+                cluster_info = await ClusterService().get_cluster(request.cluster)
+                if cluster_info and cluster_info.spec.bastion:
+                    b = cluster_info.spec.bastion
+                    kubeconfig_yaml = rewrite_kubeconfig_server(
+                        kubeconfig_yaml, b.ip, b.api_port
+                    )
+                kube_dict = yaml.safe_load(kubeconfig_yaml)
 
         # 1. Generate key pair
         key_pair = await asyncio.to_thread(_generate_key_pair, repo_name)
@@ -178,12 +204,12 @@ class DeployKeyService:
         # 3. Create K8s Secret in flux-system
         secret_name = f"flux-{repo_name}-key"
         await asyncio.to_thread(
-            _create_deploy_key_secret, cluster_context, repo_name, key_pair.private_key
+            _create_deploy_key_secret, kube_dict, repo_name, key_pair.private_key
         )
 
         # 4. Create Flux GitRepository CR
         await asyncio.to_thread(
-            _create_flux_gitrepository, cluster_context, repo_name, request.git_url, secret_name
+            _create_flux_gitrepository, kube_dict, repo_name, request.git_url, secret_name
         )
 
         return GitAccessResponse(

@@ -1,0 +1,17 @@
+{
+  "_comment": "POST /api/v1/application-configs — podzone-mpc MCP context server on agentsonly (CC-059)",
+  "_curl": "curl -s -X POST -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @application-configs/podzone-mpc-agentsonly.json http://localhost:8000/api/v1/application-configs",
+  "_schema_review": {
+    "app_id": "str — matches application name ('podzone-mpc')",
+    "cluster_id": "str — target cluster ('agentsonly')",
+    "enabled": "bool — true = active deployment",
+    "values_override": "str — per-cluster values override (empty = use application-level values_yaml)",
+    "external_hosts": "list[str] — MCP SSE endpoint is internal-only for cluster agents; no external exposure initially"
+  },
+  "_note": "MCP server is accessed via SSE transport in-cluster. External HTTPRoute is a future consideration when agent fleet is expanded. Requires qdrant and ollama to be Ready first.",
+  "app_id": "podzone-mpc",
+  "cluster_id": "agentsonly",
+  "enabled": true,
+  "values_override": "",
+  "external_hosts": []
+}

@@ -5,10 +5,15 @@ Unit tests for ClusterService — mocks GitService and GitHubService.
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from gitopsgui.models.cluster import ClusterSpec, ClusterDimensions, PlatformSpec, TalosTemplateSpec
+from gitopsgui.models.cluster import (
+    ClusterSpec, ClusterDimensions, PlatformSpec, TalosTemplateSpec,
+    IngressConnectorSpec, TokenSecretRef,
+)
 from gitopsgui.services.cluster_service import (
     ClusterService, _render_values, _render_kustomization, _render_cluster_yaml,
     _set_kustomization_suspended, _remove_kustomization,
+    _render_cloudflared_yaml, _render_cloudflared_apps_kustomization,
+    _render_cloudflared_flux_kustomization,
 )
 
 
@@ -395,3 +400,250 @@ def test_render_values_platform_block_has_talos_template_subkey():
     """The platform: block in values YAML must contain a talos_template: sub-block."""
     out = _render_values(_SPEC)
     assert "talos_template:" in out
+
+
+# ---------------------------------------------------------------------------
+# IngressConnectorSpec model
+# ---------------------------------------------------------------------------
+
+def test_ingress_connector_defaults():
+    ic = IngressConnectorSpec()
+    assert ic.enabled is True
+    assert ic.type == "cloudflare-tunnel"
+    assert ic.replicas == 2
+    assert ic.namespace == "cloudflared"
+    assert ic.token_secret_ref.name == "cloudflare-tunnel-token"
+    assert ic.token_secret_ref.key == "token"
+
+
+def test_token_secret_ref_custom():
+    ref = TokenSecretRef(name="my-secret", key="api-token")
+    assert ref.name == "my-secret"
+    assert ref.key == "api-token"
+
+
+# ---------------------------------------------------------------------------
+# _render_values — ingress_connector roundtrip
+# ---------------------------------------------------------------------------
+
+def test_render_values_ingress_connector_included():
+    ic = IngressConnectorSpec(
+        tunnel_id="71e24b2a-94c2-4064-bf4e-137150356331",
+        token_secret_ref=TokenSecretRef(name="cloudflare-tunnel-token"),
+    )
+    spec = _SPEC.model_copy(update={"ingress_connector": ic})
+    out = _render_values(spec)
+    assert "ingress_connector:" in out
+    assert "cloudflare-tunnel-token" in out
+    assert "71e24b2a-94c2-4064-bf4e-137150356331" in out
+
+
+def test_render_values_ingress_connector_omitted_when_none():
+    out = _render_values(_SPEC)
+    assert "ingress_connector" not in out
+
+
+# ---------------------------------------------------------------------------
+# _render_cloudflared_yaml
+# ---------------------------------------------------------------------------
+
+def test_render_cloudflared_yaml_contains_helmrelease():
+    ic = IngressConnectorSpec()
+    out = _render_cloudflared_yaml(ic)
+    assert "HelmRelease" in out
+    assert "cloudflared" in out
+    assert "cloudflare-tunnel-remote" in out
+
+
+def test_render_cloudflared_yaml_uses_token_secret_ref():
+    ic = IngressConnectorSpec(
+        token_secret_ref=TokenSecretRef(name="my-tunnel-token", key="token")
+    )
+    out = _render_cloudflared_yaml(ic)
+    assert "my-tunnel-token" in out
+    assert "cloudflare.tunnel_token" in out
+
+
+def test_render_cloudflared_yaml_uses_namespace():
+    ic = IngressConnectorSpec(namespace="custom-ns")
+    out = _render_cloudflared_yaml(ic)
+    assert "name: custom-ns" in out
+
+
+def test_render_cloudflared_yaml_includes_helmrepository():
+    ic = IngressConnectorSpec()
+    out = _render_cloudflared_yaml(ic)
+    assert "HelmRepository" in out
+    assert "cloudflare.github.io/helm-charts" in out
+
+
+def test_render_cloudflared_apps_kustomization_references_yaml():
+    out = _render_cloudflared_apps_kustomization()
+    assert "cloudflared.yaml" in out
+
+
+def test_render_cloudflared_flux_kustomization_references_cluster():
+    out = _render_cloudflared_flux_kustomization("my-cluster")
+    assert "my-cluster-apps" in out
+    assert "gitops/gitops-apps/cloudflared" in out
+    assert "sops-age" in out
+
+
+# ---------------------------------------------------------------------------
+# wire_ingress_connector
+# ---------------------------------------------------------------------------
+
+async def test_wire_ingress_connector_raises_if_cluster_not_found():
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.read_file = AsyncMock(side_effect=FileNotFoundError("not found"))
+    import pytest
+    with pytest.raises(FileNotFoundError):
+        await svc.wire_ingress_connector("missing")
+
+
+async def test_wire_ingress_connector_raises_if_no_connector():
+    import yaml as _yaml
+    raw = _yaml.dump({
+        "cluster": {"name": "test-cluster"},
+        "network": {"ip_ranges": ["10.0.0.0/24"]},
+        "vip": "10.0.0.1",
+        "sops_secret_ref": "sops-key",
+        "dimensions": {"control_plane_count": 1, "worker_count": 1,
+                       "cpu_per_node": 4, "memory_gb_per_node": 8, "boot_volume_gb": 50},
+    })
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.read_file = AsyncMock(return_value=raw)
+    import pytest
+    with pytest.raises(ValueError, match="no ingress_connector"):
+        await svc.wire_ingress_connector("test-cluster")
+
+
+async def test_wire_ingress_connector_opens_two_prs():
+    import yaml as _yaml
+    from unittest.mock import patch, AsyncMock as AM
+
+    ic_data = {
+        "enabled": True,
+        "type": "cloudflare-tunnel",
+        "tunnel_id": "abc-123",
+        "replicas": 2,
+        "namespace": "cloudflared",
+        "token_secret_ref": {"name": "cloudflare-tunnel-token", "key": "token"},
+    }
+    raw = _yaml.dump({
+        "cluster": {"name": "test-cluster"},
+        "network": {"ip_ranges": ["10.0.0.0/24"]},
+        "vip": "10.0.0.1",
+        "sops_secret_ref": "sops-key",
+        "dimensions": {"control_plane_count": 1, "worker_count": 1,
+                       "cpu_per_node": 4, "memory_gb_per_node": 8, "boot_volume_gb": 50},
+        "ingress_connector": ic_data,
+    })
+
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.read_file = AsyncMock(return_value=raw)
+
+    mock_git_apps = AsyncMock()
+    mock_git_apps.read_file = AsyncMock(return_value="existing: content\n")
+    mock_git_infra = AsyncMock()
+    mock_git_infra.read_file = AsyncMock(return_value="existing: content\n")
+    mock_gh_apps = AsyncMock()
+    mock_gh_apps.create_pr = AsyncMock(return_value="https://github.com/test/apps/pull/1")
+    mock_gh_infra = AsyncMock()
+    mock_gh_infra.create_pr = AsyncMock(return_value="https://github.com/test/infra/pull/2")
+
+    with (
+        patch("gitopsgui.services.cluster_service.repo_router.git_for_apps", return_value=mock_git_apps),
+        patch("gitopsgui.services.cluster_service.repo_router.git_for_infra", return_value=mock_git_infra),
+        patch("gitopsgui.services.cluster_service.repo_router.github_for_apps", return_value=mock_gh_apps),
+        patch("gitopsgui.services.cluster_service.repo_router.github_for_infra", return_value=mock_gh_infra),
+    ):
+        result = await svc.wire_ingress_connector("test-cluster")
+
+    assert result.apps_pr_url == "https://github.com/test/apps/pull/1"
+    assert result.infra_pr_url == "https://github.com/test/infra/pull/2"
+    assert result.name == "test-cluster"
+    assert mock_git_apps.write_file.call_count == 2  # cloudflared.yaml + kustomization.yaml
+    assert mock_gh_apps.create_pr.call_count == 1
+    assert mock_gh_infra.create_pr.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# ClusterService.bootstrap_cluster — CC-053b
+# ---------------------------------------------------------------------------
+
+async def test_bootstrap_cluster_raises_if_cluster_not_found():
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.read_file = AsyncMock(side_effect=FileNotFoundError("not found"))
+    from gitopsgui.models.deploy_key import ClusterBootstrapRequest
+    with pytest.raises(FileNotFoundError):
+        await svc.bootstrap_cluster("missing", ClusterBootstrapRequest())
+
+
+async def test_bootstrap_cluster_returns_response():
+    import yaml as _yaml
+    from unittest.mock import patch, AsyncMock as AM
+    from gitopsgui.models.deploy_key import ClusterBootstrapRequest
+    from gitopsgui.models.sops import SOPSBootstrapResponse
+    from gitopsgui.models.deploy_key import GitAccessResponse
+
+    raw = _yaml.dump({
+        "cluster": {"name": "test-cluster"},
+        "network": {"ip_ranges": ["10.0.0.0/24"]},
+        "vip": "10.0.0.1",
+        "sops_secret_ref": "sops-key",
+        "dimensions": {"control_plane_count": 1, "worker_count": 1,
+                       "cpu_per_node": 4, "memory_gb_per_node": 8, "boot_volume_gb": 50},
+    })
+
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.read_file = AsyncMock(return_value=raw)
+
+    mock_sops_result = SOPSBootstrapResponse(
+        cluster_name="test-cluster",
+        sops_public_key="age1testpub",
+        encrypted_key_path="sops-keys/test-cluster.agekey.enc",
+        secret_created=False,
+        sops_yaml_committed=True,
+        mgmt_pr_url="https://github.com/org/management-infra/pull/5",
+    )
+    mock_infra_result = GitAccessResponse(
+        repo_name="test-cluster-infra",
+        github_key_id=11,
+        secret_name="flux-test-cluster-infra-key",
+        gitrepository_created=False,
+    )
+    mock_apps_result = GitAccessResponse(
+        repo_name="test-cluster-apps",
+        github_key_id=22,
+        secret_name="flux-test-cluster-apps-key",
+        gitrepository_created=False,
+    )
+
+    mock_sops_svc = AsyncMock()
+    mock_sops_svc.sops_bootstrap = AsyncMock(return_value=mock_sops_result)
+    mock_dks = AsyncMock()
+    mock_dks.configure_repository_access = AsyncMock(
+        side_effect=[mock_infra_result, mock_apps_result]
+    )
+
+    with patch("gitopsgui.services.deploy_key_service.SKIP_K8S", True):
+        result = await svc.bootstrap_cluster(
+            "test-cluster",
+            ClusterBootstrapRequest(),
+            _sops_svc=mock_sops_svc,
+            _deploy_key_svc=mock_dks,
+        )
+
+    assert result.cluster_name == "test-cluster"
+    assert result.sops_public_key == "age1testpub"
+    assert result.sops_mgmt_pr_url == "https://github.com/org/management-infra/pull/5"
+    assert result.infra_key_id == 11
+    assert result.apps_key_id == 22
+    assert result.secrets_created is False
+    assert mock_dks.configure_repository_access.call_count == 2
