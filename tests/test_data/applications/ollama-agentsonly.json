@@ -1,0 +1,18 @@
+{
+  "_comment": "POST /api/v1/applications — Ollama LLM server, migrating from openclaw to agentsonly (CC-077). NOTE: ollama was failing on openclaw (context deadline exceeded, chart install timeout — likely large model pull). Monitor after deploy.",
+  "_curl": "curl -s -X POST -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @applications/ollama-agentsonly.json http://localhost:8000/api/v1/applications",
+  "_schema_review": {
+    "name": "str — application name, used as namespace + HelmRelease name",
+    "cluster": "str — target cluster; routes to agentsonly-apps and agentsonly-infra repos",
+    "helm_repo_url": "str — HelmRepository URL",
+    "chart_name": "str — chart name within the repo",
+    "chart_version": "str — 1.52.0 was installed on openclaw (chart version, not ollama version)",
+    "values_yaml": "str — values copied from openclaw configmap ollama-values-hfk4gddm96"
+  },
+  "name": "ollama",
+  "cluster": "agentsonly",
+  "helm_repo_url": "https://helm.otwld.com/",
+  "chart_name": "ollama",
+  "chart_version": "1.52.0",
+  "values_yaml": "replicaCount: 1\n\nollama:\n  models:\n    pull:\n      - nomic-embed-text\n      - phi3.5\n\nresources:\n  requests:\n    cpu: \"2000m\"\n    memory: \"4Gi\"\n  limits:\n    cpu: \"8000m\"\n    memory: \"16Gi\"\n\npersistentVolume:\n  enabled: true\n  size: 20Gi\n  storageClass: piraeus-datastore\n"
+}

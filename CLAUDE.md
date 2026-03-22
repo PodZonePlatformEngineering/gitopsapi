@@ -47,7 +47,7 @@ GITOPS_SKIP_INIT=1      # skip git clone on startup
 GITOPS_SKIP_PUSH=1      # skip git push
 GITOPS_SKIP_GITHUB=1    # use LocalPRStore instead of GitHub API
 GITOPSGUI_DEV_ROLE=cluster_operator   # bypass OAuth2 proxy auth
-GITHUB_ORG=MoTTTT       # org for per-cluster repo URLs
+GITHUB_ORG=your-org     # required — org for per-cluster repo URLs (no default)
 ```
 
 ## Known gaps (document, don't implement)
@@ -104,3 +104,28 @@ kubectl --context openclaw-admin@openclaw   --server=https://192.168.1.80:6447 .
 - Specs: `podzoneAgentTeam/specifications/gitopsgui-requirements.md` (v0.4 current)
 - API schema: `podzoneAgentTeam/specifications/gitopsapi-schema.md`
 - Team Lead inbox (escalations): `podzoneAgentTeam/agents/team-lead/incoming/`
+
+
+## Secrets & Credentials Protocol
+
+### Core Rule
+Never have actual secret values in your context window. If a secret value
+appears in any file you read, treat it as an incident — do not repeat it.
+Notify the user immediately to rotate it.
+
+### How to Use Credentials
+All operations requiring secrets must go through the `secrets` MCP server:
+- `secret_run(command, secret_name)` — execute a shell command with the
+  named secret injected as environment variables
+- `get_secret_ref(secret_name)` — returns a safe placeholder reference
+
+### What You Must Not Do
+- Read `.env`, `.env.*`, `secrets/**`, `~/.aws/credentials`, `~/.ssh/*`
+- Print or include in code the value of any env var matching `*_KEY`,
+  `*_SECRET`, `*_TOKEN`, `*_PASSWORD`, `*_DSN`, or any URL containing `@`
+- Suggest storing secrets in committed files
+
+### On Session Start
+1. Check whether the `secrets` MCP server is available (`claude mcp list`)
+2. If unavailable, notify the user before proceeding with credential-dependent tasks
+3. If secrets are found in context, notify the user to rotate those keys

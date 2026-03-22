@@ -19,7 +19,7 @@ services:
       GITOPS_LOCAL_PATH: /tmp/gitops-repo
       # GitHub API
       GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
-      GITHUB_REPO: "${GITHUB_REPO:-motttt/cluster09}"
+      GITHUB_REPO: "${GITHUB_REPO}"
       # Management cluster kubeconfig (base64-encoded YAML)
       MGMT_KUBECONFIG_SECRET: "${MGMT_KUBECONFIG_SECRET:-}"
       # SOPS age key
