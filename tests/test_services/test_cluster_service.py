@@ -569,3 +569,81 @@ async def test_wire_ingress_connector_opens_two_prs():
     assert mock_git_apps.write_file.call_count == 2  # cloudflared.yaml + kustomization.yaml
     assert mock_gh_apps.create_pr.call_count == 1
     assert mock_gh_infra.create_pr.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# ClusterService.bootstrap_cluster — CC-053b
+# ---------------------------------------------------------------------------
+
+async def test_bootstrap_cluster_raises_if_cluster_not_found():
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.read_file = AsyncMock(side_effect=FileNotFoundError("not found"))
+    from gitopsgui.models.deploy_key import ClusterBootstrapRequest
+    with pytest.raises(FileNotFoundError):
+        await svc.bootstrap_cluster("missing", ClusterBootstrapRequest())
+
+
+async def test_bootstrap_cluster_returns_response():
+    import yaml as _yaml
+    from unittest.mock import patch, AsyncMock as AM
+    from gitopsgui.models.deploy_key import ClusterBootstrapRequest
+    from gitopsgui.models.sops import SOPSBootstrapResponse
+    from gitopsgui.models.deploy_key import GitAccessResponse
+
+    raw = _yaml.dump({
+        "cluster": {"name": "test-cluster"},
+        "network": {"ip_ranges": ["10.0.0.0/24"]},
+        "vip": "10.0.0.1",
+        "sops_secret_ref": "sops-key",
+        "dimensions": {"control_plane_count": 1, "worker_count": 1,
+                       "cpu_per_node": 4, "memory_gb_per_node": 8, "boot_volume_gb": 50},
+    })
+
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.read_file = AsyncMock(return_value=raw)
+
+    mock_sops_result = SOPSBootstrapResponse(
+        cluster_name="test-cluster",
+        sops_public_key="age1testpub",
+        encrypted_key_path="sops-keys/test-cluster.agekey.enc",
+        secret_created=False,
+        sops_yaml_committed=True,
+        mgmt_pr_url="https://github.com/org/management-infra/pull/5",
+    )
+    mock_infra_result = GitAccessResponse(
+        repo_name="test-cluster-infra",
+        github_key_id=11,
+        secret_name="flux-test-cluster-infra-key",
+        gitrepository_created=False,
+    )
+    mock_apps_result = GitAccessResponse(
+        repo_name="test-cluster-apps",
+        github_key_id=22,
+        secret_name="flux-test-cluster-apps-key",
+        gitrepository_created=False,
+    )
+
+    mock_sops_svc = AsyncMock()
+    mock_sops_svc.sops_bootstrap = AsyncMock(return_value=mock_sops_result)
+    mock_dks = AsyncMock()
+    mock_dks.configure_repository_access = AsyncMock(
+        side_effect=[mock_infra_result, mock_apps_result]
+    )
+
+    with patch("gitopsgui.services.deploy_key_service.SKIP_K8S", True):
+        result = await svc.bootstrap_cluster(
+            "test-cluster",
+            ClusterBootstrapRequest(),
+            _sops_svc=mock_sops_svc,
+            _deploy_key_svc=mock_dks,
+        )
+
+    assert result.cluster_name == "test-cluster"
+    assert result.sops_public_key == "age1testpub"
+    assert result.sops_mgmt_pr_url == "https://github.com/org/management-infra/pull/5"
+    assert result.infra_key_id == 11
+    assert result.apps_key_id == 22
+    assert result.secrets_created is False
+    assert mock_dks.configure_repository_access.call_count == 2

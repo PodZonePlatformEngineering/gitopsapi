@@ -22,6 +22,7 @@ from ..models.cluster import (
     IngressConnectorSpec, IngressConnectorResponse,
     PlatformSpec,
 )
+from ..models.deploy_key import ClusterBootstrapRequest, ClusterBootstrapResponse
 from .git_service import GitService
 from .github_service import GitHubService
 from . import repo_router
@@ -592,4 +593,89 @@ class ClusterService:
             name=cluster_name,
             apps_pr_url=apps_pr_url,
             infra_pr_url=infra_pr_url,
+        )
+
+    async def bootstrap_cluster(
+        self,
+        cluster_name: str,
+        request: ClusterBootstrapRequest,
+        _sops_svc=None,       # injectable for tests
+        _deploy_key_svc=None,  # injectable for tests
+    ) -> ClusterBootstrapResponse:
+        """CC-053b — Install SOPS key + SSH deploy keys on a newly provisioned cluster.
+
+        Requires the cluster to be running and reachable via the CAPI management cluster.
+        Kubeconfig is extracted from the CAPI management secret — no local kubeconfig needed.
+
+        Orchestrates:
+        1. SOPS age key generation, encryption, management-infra PR, cluster Secret install
+        2. SSH deploy key for {cluster}-infra → GitHub + cluster flux-system Secret + GitRepository CR
+        3. SSH deploy key for {cluster}-apps  → GitHub + cluster flux-system Secret + GitRepository CR
+
+        After this call, Flux can be bootstrapped on the cluster pointing at {cluster}-infra
+        and it will have credentials to pull from both repos.
+        """
+        import yaml as _yaml
+        from .kubeconfig_service import KubeconfigService, rewrite_kubeconfig_server
+        from .sops_service import SOPSService
+        from .deploy_key_service import DeployKeyService, SKIP_K8S
+        from .github_service import GITHUB_ORG
+        from ..models.sops import SOPSBootstrapRequest
+        from ..models.deploy_key import GitAccessRequest
+
+        cluster = await self.get_cluster(cluster_name)
+        if not cluster:
+            raise FileNotFoundError(f"Cluster {cluster_name!r} not found in registry")
+
+        # Extract kubeconfig from CAPI (raises HTTPException 503/404 if not available)
+        kubeconfig_dict: dict = {}
+        if not SKIP_K8S:
+            kubeconfig_yaml = await KubeconfigService().extract_kubeconfig(cluster_name)
+            if cluster.spec.bastion:
+                b = cluster.spec.bastion
+                kubeconfig_yaml = rewrite_kubeconfig_server(
+                    kubeconfig_yaml, b.ip, b.api_port
+                )
+            kubeconfig_dict = _yaml.safe_load(kubeconfig_yaml)
+
+        # 1. SOPS bootstrap: generate key, encrypt, PR on management-infra, install Secret
+        sops_svc = _sops_svc if _sops_svc is not None else SOPSService()
+        sops_result = await sops_svc.sops_bootstrap(
+            cluster_name,
+            SOPSBootstrapRequest(
+                management_sops_public_key=request.management_sops_public_key
+            ),
+        )
+
+        # 2 & 3. SSH deploy keys for infra and apps repos
+        dks = _deploy_key_svc if _deploy_key_svc is not None else DeployKeyService()
+        org = GITHUB_ORG
+
+        infra_name = repo_router.infra_repo_name(cluster_name)
+        apps_name = repo_router.apps_repo_name(cluster_name)
+
+        infra_result = await dks.configure_repository_access(
+            infra_name,
+            GitAccessRequest(
+                cluster=cluster_name,
+                git_url=f"git@github.com:{org}/{infra_name}.git",
+            ),
+            kubeconfig_dict=kubeconfig_dict or None,
+        )
+        apps_result = await dks.configure_repository_access(
+            apps_name,
+            GitAccessRequest(
+                cluster=cluster_name,
+                git_url=f"git@github.com:{org}/{apps_name}.git",
+            ),
+            kubeconfig_dict=kubeconfig_dict or None,
+        )
+
+        return ClusterBootstrapResponse(
+            cluster_name=cluster_name,
+            sops_public_key=sops_result.sops_public_key,
+            sops_mgmt_pr_url=sops_result.mgmt_pr_url,
+            infra_key_id=infra_result.github_key_id,
+            apps_key_id=apps_result.github_key_id,
+            secrets_created=not SKIP_K8S,
         )
