@@ -16,4 +16,5 @@ class SOPSBootstrapResponse(BaseModel):
     encrypted_key_path: str     # path in management-infra repo (e.g. sops-keys/gitopsdev.agekey.enc)
     secret_created: bool        # False when GITOPS_SKIP_K8S=1
     sops_yaml_committed: bool
+    mgmt_pr_url: Optional[str] = None  # PR URL for the encrypted key commit in management-infra
     error: Optional[str] = None
