@@ -1,0 +1,19 @@
+{
+  "_comment": "POST /api/v1/applications — Qdrant vector database, migrating from openclaw to agentsonly (CC-077)",
+  "_curl": "curl -s -X POST -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @applications/qdrant-agentsonly.json http://localhost:8000/api/v1/applications",
+  "_schema_review": {
+    "name": "str — application name, used as namespace + HelmRelease name",
+    "cluster": "str — target cluster; routes to agentsonly-apps and agentsonly-infra repos",
+    "helm_repo_url": "str — HelmRepository URL",
+    "chart_name": "str — chart name within the repo",
+    "chart_version": "str — pinned version (1.17.0 from openclaw live state)",
+    "values_yaml": "str — YAML string, empty = use chart defaults; per-cluster values go here",
+    "app_repo_url": "Optional[str] — not needed (not a hosted app)"
+  },
+  "name": "qdrant",
+  "cluster": "agentsonly",
+  "helm_repo_url": "https://qdrant.github.io/qdrant-helm",
+  "chart_name": "qdrant",
+  "chart_version": "1.17.0",
+  "values_yaml": "replicaCount: 1\n\npersistence:\n  enabled: true\n  size: 30Gi\n  storageClassName: piraeus-datastore\n\nresources:\n  requests:\n    memory: \"2Gi\"\n    cpu: \"500m\"\n  limits:\n    memory: \"4Gi\"\n    cpu: \"1000m\"\n\npodDisruptionBudget:\n  enabled: true\n  maxUnavailable: 1\n"
+}

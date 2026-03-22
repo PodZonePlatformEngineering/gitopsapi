@@ -1,0 +1,18 @@
+{
+  "_comment": "POST /api/v1/applications — OpenBao secrets manager (single-node Raft, UI enabled, platform-services)",
+  "_curl": "curl -s -X POST -H 'Host: gitopsgui.podzone.cloud' -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @applications/openbao.json http://freyr:8081/api/v1/applications",
+  "_schema_review": {
+    "name": "str — application name; becomes namespace + HelmRelease name",
+    "cluster": "str — target cluster for this catalog registration",
+    "helm_repo_url": "str — HelmRepository source URL",
+    "chart_name": "str — chart name within the repo",
+    "chart_version": "str — pinned chart version; confirm latest at https://openbao.github.io/openbao-helm/",
+    "values_yaml": "str — base values; single-node Raft (ha.enabled=false), UI, piraeus-datastore PVC"
+  },
+  "name": "openbao",
+  "cluster": "platform-services",
+  "helm_repo_url": "https://openbao.github.io/openbao-helm/",
+  "chart_name": "openbao",
+  "chart_version": "0.8.1",
+  "values_yaml": "server:\n  dataStorage:\n    enabled: true\n    size: 20Gi\n    storageClass: piraeus-datastore\n  ha:\n    enabled: false\n    replicas: 1\n  ui:\n    enabled: true\n    serviceType: ClusterIP\n  resources:\n    requests:\n      cpu: 250m\n      memory: 512Mi\n    limits:\n      cpu: 1000m\n      memory: 1Gi\npodDisruptionBudget:\n  enabled: true\n  maxUnavailable: 0\n"
+}

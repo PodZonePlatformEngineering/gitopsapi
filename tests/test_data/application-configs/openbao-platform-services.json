@@ -1,0 +1,9 @@
+{
+  "_comment": "POST /api/v1/application-configs — OpenBao on platform-services (secrets.podzone.cloud). After deployment: init manually — `bao operator init`, distribute unseal keys, `bao operator unseal`. See https://openbao.org/docs/commands/operator/init/",
+  "_curl": "curl -s -X POST -H 'Host: gitopsgui.podzone.cloud' -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @application-configs/openbao-platform-services.json http://freyr:8081/api/v1/application-configs",
+  "app_id": "openbao",
+  "cluster_id": "platform-services",
+  "enabled": true,
+  "values_override": "",
+  "external_hosts": ["secrets.podzone.cloud"]
+}
