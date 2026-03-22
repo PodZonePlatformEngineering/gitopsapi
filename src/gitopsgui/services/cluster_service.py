@@ -8,12 +8,15 @@ Gitops repo layout:
 Writes go via feature branch + PR labelled 'cluster' + stage label.
 """
 
+import os
 import textwrap
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 
 import yaml
+
+CLUSTER_CHART_REPO_URL = os.environ.get("GITOPS_CLUSTER_CHART_REPO_URL", "")
 
 from ..models.cluster import (
     ClusterSpec, ClusterResponse, ClusterStatus,
@@ -157,7 +160,7 @@ def _render_cluster_yaml(name: str) -> str:
           namespace: flux-system
         spec:
           interval: 10m0s
-          url: https://motttt.github.io/cluster09/
+          url: {CLUSTER_CHART_REPO_URL}
         ---
         apiVersion: helm.toolkit.fluxcd.io/v2beta2
         kind: HelmRelease

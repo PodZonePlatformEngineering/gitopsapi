@@ -4,7 +4,7 @@
   "_schema_review": {
     "name": "str — application name, used as namespace + HelmRelease name",
     "cluster": "str — target cluster; routes to agentsonly-apps and agentsonly-infra repos",
-    "helm_repo_url": "str — Helm chart repo (GitHub Pages for MoTTTT/podzone-mpc)",
+    "helm_repo_url": "str — Helm chart repo (GitHub Pages for your-org/podzone-mpc)",
     "chart_name": "str — chart name within the repo",
     "chart_version": "str — 0.1.0 (initial release)",
     "values_yaml": "str — inline values; sets Qdrant + Ollama service URLs and collection name",
@@ -16,6 +16,6 @@
   "helm_repo_url": "https://motttt.github.io/podzone-mpc",
   "chart_name": "podzone-mpc",
   "chart_version": "0.1.0",
-  "app_repo_url": "https://github.com/MoTTTT/podzone-mpc",
+  "app_repo_url": "https://github.com/your-org/podzone-mpc",
   "values_yaml": "imagePullSecrets:\n  - name: ghcr-regcred\n\nenv:\n  qdrantUrl: \"http://qdrant.qdrant.svc.cluster.local:6333\"\n  ollamaUrl: \"http://ollama.ollama.svc.cluster.local:11434\"\n  ollamaEmbedModel: \"nomic-embed-text\"\n  qdrantCollection: \"agentsonly\"\n"
 }
