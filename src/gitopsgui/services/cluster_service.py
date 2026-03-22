@@ -8,6 +8,7 @@ Gitops repo layout:
 Writes go via feature branch + PR labelled 'cluster' + stage label.
 """
 
+import os
 import textwrap
 import uuid
 from datetime import datetime, timezone
@@ -18,10 +19,14 @@ import yaml
 from ..models.cluster import (
     ClusterSpec, ClusterResponse, ClusterStatus,
     ClusterSuspendResponse, ClusterDecommissionResponse,
+    IngressConnectorSpec, IngressConnectorResponse,
     PlatformSpec,
 )
 from .git_service import GitService
 from .github_service import GitHubService
+from . import repo_router
+
+CLUSTER_CHART_REPO_URL = os.environ.get("GITOPS_CLUSTER_CHART_REPO_URL", "")
 
 _CLUSTER_CHARTS_BASE = "gitops/cluster-charts"
 _CLUSTERS_BASE = "clusters"
@@ -133,6 +138,19 @@ def _render_values(spec: ClusterSpec) -> str:
     data["allow_scheduling_on_control_planes"] = spec.allow_scheduling_on_control_planes
     if spec.external_hosts:
         data["external_hosts"] = spec.external_hosts
+    if spec.ingress_connector:
+        ic = spec.ingress_connector
+        data["ingress_connector"] = {
+            "enabled": ic.enabled,
+            "type": ic.type,
+            "tunnel_id": ic.tunnel_id,
+            "replicas": ic.replicas,
+            "namespace": ic.namespace,
+            "token_secret_ref": {
+                "name": ic.token_secret_ref.name,
+                "key": ic.token_secret_ref.key,
+            },
+        }
     data["dimensions"] = {
         "control_plane_count": spec.dimensions.control_plane_count,
         "worker_count": spec.dimensions.worker_count,
@@ -157,7 +175,7 @@ def _render_cluster_yaml(name: str) -> str:
           namespace: flux-system
         spec:
           interval: 10m0s
-          url: https://motttt.github.io/cluster09/
+          url: {CLUSTER_CHART_REPO_URL}
         ---
         apiVersion: helm.toolkit.fluxcd.io/v2beta2
         kind: HelmRelease
@@ -206,6 +224,84 @@ _KUSTOMIZECONFIG = textwrap.dedent("""\
         kind: HelmRelease
 """)
 
+_CLOUDFLARED_APPS_PATH = "gitops/gitops-apps/cloudflared"
+
+
+def _render_cloudflared_yaml(connector: IngressConnectorSpec) -> str:
+    """Render cloudflared HelmRelease + HelmRepository + Namespace for the cluster apps repo."""
+    return textwrap.dedent(f"""\
+        ---
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: {connector.namespace}
+        ---
+        apiVersion: source.toolkit.fluxcd.io/v1
+        kind: HelmRepository
+        metadata:
+          name: cloudflare
+          namespace: flux-system
+        spec:
+          interval: 24h
+          url: https://cloudflare.github.io/helm-charts
+        ---
+        apiVersion: helm.toolkit.fluxcd.io/v2
+        kind: HelmRelease
+        metadata:
+          name: cloudflared
+          namespace: {connector.namespace}
+        spec:
+          interval: 30m
+          chart:
+            spec:
+              chart: cloudflare-tunnel-remote
+              version: "0.1.2"
+              sourceRef:
+                kind: HelmRepository
+                name: cloudflare
+                namespace: flux-system
+          valuesFrom:
+            - kind: Secret
+              name: {connector.token_secret_ref.name}
+              valuesKey: {connector.token_secret_ref.key}
+              targetPath: cloudflare.tunnel_token
+    """)
+
+
+def _render_cloudflared_apps_kustomization() -> str:
+    """Render kustomization.yaml for the cloudflared app directory."""
+    return textwrap.dedent("""\
+        apiVersion: kustomize.config.k8s.io/v1beta1
+        kind: Kustomization
+        resources:
+          - cloudflared.yaml
+    """)
+
+
+def _render_cloudflared_flux_kustomization(cluster_name: str) -> str:
+    """Render the Flux Kustomization entry to append to {cluster}-infra/{name}-apps.yaml."""
+    return textwrap.dedent(f"""\
+        ---
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        metadata:
+          name: cloudflared
+          namespace: flux-system
+        spec:
+          interval: 1h
+          retryInterval: 1m
+          timeout: 5m
+          sourceRef:
+            kind: GitRepository
+            name: {cluster_name}-apps
+          path: ./{_CLOUDFLARED_APPS_PATH}
+          prune: true
+          decryption:
+            provider: sops
+            secretRef:
+              name: sops-age
+    """)
+
 
 class ClusterService:
     def __init__(self):
@@ -231,6 +327,9 @@ class ClusterService:
         raw_platform = data.get("platform")
         platform = PlatformSpec(**raw_platform) if isinstance(raw_platform, dict) else None
 
+        raw_ic = data.get("ingress_connector")
+        ingress_connector = IngressConnectorSpec(**raw_ic) if isinstance(raw_ic, dict) else None
+
         spec = ClusterSpec(
             name=name,
             platform=platform,
@@ -241,6 +340,7 @@ class ClusterService:
             sops_secret_ref=data.get("sops_secret_ref", ""),
             allow_scheduling_on_control_planes=data.get("allow_scheduling_on_control_planes", False),
             external_hosts=data.get("external_hosts", []),
+            ingress_connector=ingress_connector,
         )
         return ClusterResponse(name=name, spec=spec)
 
@@ -409,3 +509,87 @@ class ClusterService:
         )
 
         return ClusterDecommissionResponse(name=name, pr_url=pr_url, archived_repos=archived)
+
+    async def wire_ingress_connector(self, cluster_name: str) -> IngressConnectorResponse:
+        """CC-068 Phase 1: render cloudflared manifests into {cluster}-apps and {cluster}-infra.
+
+        Writes to two repos:
+        - {cluster}-apps: gitops/gitops-apps/cloudflared/ (HelmRelease + kustomization)
+        - {cluster}-infra: appends cloudflared Flux Kustomization to clusters/{name}/{name}-apps.yaml
+
+        Raises ValueError if the cluster has no ingress_connector configured or it is disabled.
+        """
+        cluster = await self.get_cluster(cluster_name)
+        if not cluster:
+            raise FileNotFoundError(f"Cluster {cluster_name!r} not found")
+
+        connector = cluster.spec.ingress_connector
+        if not connector or not connector.enabled:
+            raise ValueError(
+                f"Cluster {cluster_name!r} has no ingress_connector configured or it is disabled. "
+                "Set ingress_connector.enabled=true in the cluster spec first."
+            )
+
+        branch = f"cluster/ingress-connector-{cluster_name}-{uuid.uuid4().hex[:8]}"
+
+        # --- apps repo: write cloudflared manifests ---
+        git_apps = repo_router.git_for_apps(cluster_name)
+        gh_apps = repo_router.github_for_apps(cluster_name)
+
+        await git_apps.create_branch(branch)
+        await git_apps.write_file(
+            f"{_CLOUDFLARED_APPS_PATH}/cloudflared.yaml",
+            _render_cloudflared_yaml(connector),
+        )
+        await git_apps.write_file(
+            f"{_CLOUDFLARED_APPS_PATH}/kustomization.yaml",
+            _render_cloudflared_apps_kustomization(),
+        )
+        await git_apps.commit(f"feat: add cloudflared ingress connector for {cluster_name}")
+        await git_apps.push()
+
+        apps_pr_url = await gh_apps.create_pr(
+            branch=branch,
+            title=f"feat: wire cloudflared ingress connector — {cluster_name}",
+            body=(
+                f"Adds cloudflared HelmRelease to `{cluster_name}-apps`.\n\n"
+                f"**Tunnel token secret**: `{connector.token_secret_ref.name}` "
+                f"(key: `{connector.token_secret_ref.key}`) must exist in namespace "
+                f"`{connector.namespace}` before this can reconcile.\n\n"
+                f"**Companion PR** in `{cluster_name}-infra` adds the Flux Kustomization entry.\n\n"
+                f"CC-068 Phase 1"
+            ),
+            labels=["cluster", _CLUSTER_STAGE_LABEL],
+            reviewers=_CLUSTER_REVIEWERS,
+        )
+
+        # --- infra repo: append Flux Kustomization entry to {name}-apps.yaml ---
+        git_infra = repo_router.git_for_infra(cluster_name)
+        gh_infra = repo_router.github_for_infra(cluster_name)
+
+        await git_infra.create_branch(branch)
+        apps_yaml_path = f"clusters/{cluster_name}/{cluster_name}-apps.yaml"
+        existing = await git_infra.read_file(apps_yaml_path)
+        updated = existing.rstrip("\n") + "\n" + _render_cloudflared_flux_kustomization(cluster_name)
+        await git_infra.write_file(apps_yaml_path, updated)
+        await git_infra.commit(f"feat: add cloudflared Kustomization for {cluster_name}")
+        await git_infra.push()
+
+        infra_pr_url = await gh_infra.create_pr(
+            branch=branch,
+            title=f"feat: wire cloudflared Flux Kustomization — {cluster_name}",
+            body=(
+                f"Adds `cloudflared` Flux Kustomization to `clusters/{cluster_name}/{cluster_name}-apps.yaml`.\n\n"
+                f"**Merge after** the companion `{cluster_name}-apps` PR so the HelmRelease exists "
+                f"before Flux reconciles this Kustomization.\n\n"
+                f"CC-068 Phase 1"
+            ),
+            labels=["cluster", _CLUSTER_STAGE_LABEL],
+            reviewers=_CLUSTER_REVIEWERS,
+        )
+
+        return IngressConnectorResponse(
+            name=cluster_name,
+            apps_pr_url=apps_pr_url,
+            infra_pr_url=infra_pr_url,
+        )

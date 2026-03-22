@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from typing import List
 
-from ...models.cluster import ClusterSpec, ClusterResponse, ClusterSuspendResponse, ClusterDecommissionResponse
+from ...models.cluster import ClusterSpec, ClusterResponse, ClusterSuspendResponse, ClusterDecommissionResponse, IngressConnectorResponse
 from ...models.sops import SOPSBootstrapRequest, SOPSBootstrapResponse
 from ...services.cluster_service import ClusterService
 from ...services.kubeconfig_service import KubeconfigService
@@ -96,6 +96,30 @@ async def decommission_cluster(
         return await svc.decommission_cluster(name)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/clusters/{name}/gateway",
+    response_model=IngressConnectorResponse,
+    status_code=202,
+    summary="Wire cloudflared ingress connector for a cluster (CC-068)",
+)
+async def wire_ingress_connector(
+    name: str,
+    _=require_role("cluster_operator"),
+):
+    """Renders cloudflared HelmRelease into {name}-apps and Flux Kustomization into {name}-infra.
+
+    The cluster spec must have ingress_connector.enabled=true set before calling this endpoint.
+    Opens two PRs: one per repo. Merge apps PR first, then infra PR.
+    """
+    svc = ClusterService()
+    try:
+        return await svc.wire_ingress_connector(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post(
