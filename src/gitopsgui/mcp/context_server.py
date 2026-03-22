@@ -78,18 +78,27 @@ async def ensure_collection() -> None:
 # ---------------------------------------------------------------------------
 
 async def embed(text: str) -> list[float]:
-    async with httpx.AsyncClient(timeout=60.0) as http:
-        response = await http.post(
-            f"{OLLAMA_URL}/api/embed",
-            json={"model": OLLAMA_EMBED_MODEL, "input": text},
-        )
-        response.raise_for_status()
-        data = response.json()
-        # Ollama /api/embed returns {"embeddings": [[...]]}
-        embeddings = data.get("embeddings") or data.get("embedding")
-        if isinstance(embeddings[0], list):
-            return embeddings[0]
-        return embeddings
+    last_exc: Exception | None = None
+    for attempt in range(5):
+        if attempt:
+            await asyncio.sleep(2 ** attempt)  # 2s, 4s, 8s, 16s
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as http:
+                response = await http.post(
+                    f"{OLLAMA_URL}/api/embed",
+                    json={"model": OLLAMA_EMBED_MODEL, "input": text},
+                )
+                response.raise_for_status()
+                data = response.json()
+                # Ollama /api/embed returns {"embeddings": [[...]]}
+                embeddings = data.get("embeddings") or data.get("embedding")
+                if isinstance(embeddings[0], list):
+                    return embeddings[0]
+                return embeddings
+        except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError) as exc:
+            last_exc = exc
+            print(f"  embed retry {attempt + 1}/5 after {type(exc).__name__}: {exc}", flush=True)
+    raise RuntimeError(f"embed failed after 5 attempts: {last_exc}") from last_exc
 
 
 # ---------------------------------------------------------------------------
