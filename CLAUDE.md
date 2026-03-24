@@ -105,27 +105,40 @@ kubectl --context openclaw-admin@openclaw   --server=https://192.168.1.80:6447 .
 - API schema: `podzoneAgentTeam/specifications/gitopsapi-schema.md`
 - Team Lead inbox (escalations): `podzoneAgentTeam/agents/team-lead/incoming/`
 
-
 ## Secrets & Credentials Protocol
 
-### Core Rule
-Never have actual secret values in your context window. If a secret value
-appears in any file you read, treat it as an incident — do not repeat it.
-Notify the user immediately to rotate it.
-
 ### How to Use Credentials
+
 All operations requiring secrets must go through the `secrets` MCP server:
-- `secret_run(command, secret_name)` — execute a shell command with the
-  named secret injected as environment variables
+
+- `secret_run(command, secret_name)` — execute a shell command with the named secret injected as environment variables
 - `get_secret_ref(secret_name)` — returns a safe placeholder reference
 
 ### What You Must Not Do
+
 - Read `.env`, `.env.*`, `secrets/**`, `~/.aws/credentials`, `~/.ssh/*`
-- Print or include in code the value of any env var matching `*_KEY`,
-  `*_SECRET`, `*_TOKEN`, `*_PASSWORD`, `*_DSN`, or any URL containing `@`
+- Print or include in code the value of any env var matching `*_KEY`, `*_SECRET`, `*_TOKEN`, `*_PASSWORD`, `*_DSN`, or any URL containing `@`
 - Suggest storing secrets in committed files
 
 ### On Session Start
+
 1. Check whether the `secrets` MCP server is available (`claude mcp list`)
 2. If unavailable, notify the user before proceeding with credential-dependent tasks
 3. If secrets are found in context, notify the user to rotate those keys
+
+### Temporary Security Posture (active until gitopsgui ETE)
+
+The podzone environment is currently classified as a **development environment**.
+
+**On credential exposure in context:**
+- Log it as informational (do not halt the session)
+- Check whether a task already exists for this credential/gap
+- If no task exists: create one in the appropriate project; if one exists: update it
+- Continue working — do not wait for Martin to rotate before proceeding
+
+**Design gap:** Proper secrets management via gitopsgui GUI is the target state.
+All exposures represent gaps in that pipeline, to be resolved as part of PROJ-003
+or the gitopsgui development roadmap.
+
+**Original production posture applies again** once gitopsgui is in ETE and
+capable of end-to-end secret management.
