@@ -1,0 +1,56 @@
+{
+  "_comment": "PATCH /api/v1/clusters/agentsonly — scale agentsonly to 2 workers × 32Gi RAM (T-020l). Dev testing via gitopsapi product flow against cluster-charts repo.",
+  "_curl": "curl -s -X PATCH -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @clusters/agentsonly-scale.json http://localhost:8000/api/v1/clusters/agentsonly",
+  "_schema_review": {
+    "name": "str — agentsonly",
+    "platform": "PlatformSpec — venus/proxmox, sourceNode=venus, templateID=100",
+    "vip": "str — 192.168.4.160 (controlplane endpoint)",
+    "ip_range": "str — 192.168.4.163-192.168.4.168 (6 IPs; 1 CP + 2 workers + headroom)",
+    "dimensions.worker_count": "int — 2 (was 1)",
+    "dimensions.memory_gb_per_node": "int — 32 (was 16)",
+    "dimensions.control_plane_count": "int — 1 (unchanged)",
+    "dimensions.cpu_per_node": "int — 4 (unchanged)",
+    "dimensions.boot_volume_gb": "int — 50 (unchanged)",
+    "managed_gitops": "bool — true (cluster-charts managed)",
+    "sops_secret_ref": "str — sops-age (as in existing values file)",
+    "extra_manifests": "list — cilium + flux + gateway-api as per existing controlplane.extra_manifests"
+  },
+  "_note": "Platform spec reconstructed from CAPI ProxmoxMachineTemplate — sourceNode:venus, templateID:100. Cluster currently in cluster-charts.git; post T-019 migration will be in management-infra.",
+  "name": "agentsonly",
+  "platform": {
+    "name": "venus",
+    "type": "proxmox",
+    "endpoint": "https://192.168.4.50:8006",
+    "nodes": ["venus"],
+    "talos_template": {
+      "name": "0-talos-template",
+      "version": "v1.9.5",
+      "vmid": 100,
+      "node": "venus"
+    },
+    "credentials_ref": "capmox-manager-credentials",
+    "bridge": "vmbr0"
+  },
+  "vip": "192.168.4.160",
+  "ip_range": "192.168.4.163-192.168.4.168",
+  "dimensions": {
+    "control_plane_count": 1,
+    "worker_count": 2,
+    "cpu_per_node": 4,
+    "memory_gb_per_node": 32,
+    "boot_volume_gb": 50
+  },
+  "managed_gitops": true,
+  "sops_secret_ref": "sops-age",
+  "extra_manifests": [
+    "http://192.168.4.1/cilium.yaml",
+    "http://192.168.4.1/flux.yaml",
+    "http://192.168.4.1/flux-instance-agentsonly.yaml",
+    "http://192.168.4.1/flux-secret.yaml",
+    "http://192.168.4.1/gateway-api.yaml"
+  ],
+  "bastion": null,
+  "allow_scheduling_on_control_planes": false,
+  "external_hosts": [],
+  "ingress_connector": null
+}
