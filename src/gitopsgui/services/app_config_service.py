@@ -27,9 +27,9 @@ from typing import List, Optional, Tuple
 import yaml
 
 from ..models.application_config import (
-    ApplicationClusterConfig,
-    ApplicationClusterConfigResponse,
-    PatchApplicationClusterConfig,
+    ApplicationDeployment,
+    ApplicationDeploymentResponse,
+    PatchApplicationDeployment,
 )
 from .repo_router import git_for_apps, git_for_infra, github_for_apps, github_for_infra
 
@@ -48,7 +48,7 @@ def _values_override_path(app_id: str, cluster_id: str) -> str:
     return f"{_APPS_BASE}/{app_id}/{app_id}-values-{cluster_id}.yaml"
 
 
-def _render_kustomization_entry(spec: ApplicationClusterConfig) -> str:
+def _render_kustomization_entry(spec: ApplicationDeployment) -> str:
     """Render a Kustomization YAML document for one app→cluster assignment."""
     source_ref_name = spec.gitops_source_ref or f"{spec.cluster_id}-apps"
     annotations_block = ""
@@ -156,7 +156,7 @@ class AppConfigService:
         """GitHubService for {cluster}-apps PRs."""
         return self._gh or github_for_apps(cluster)
 
-    async def list_by_cluster(self, cluster_id: str) -> List[ApplicationClusterConfigResponse]:
+    async def list_by_cluster(self, cluster_id: str) -> List[ApplicationDeploymentResponse]:
         """List all app-cluster configs for a given cluster by parsing its apps.yaml.
 
         Reads from {cluster_id}-infra repo.
@@ -181,7 +181,7 @@ class AppConfigService:
             external_ref = source_ref if source_ref != f"{cluster_id}-apps" else None
             hosts_csv = meta.get("annotations", {}).get("gitopsapi.podzone.net/external-hosts", "")
             external_hosts = [h.strip() for h in hosts_csv.split(",") if h.strip()]
-            results.append(ApplicationClusterConfigResponse(
+            results.append(ApplicationDeploymentResponse(
                 id=_config_id(app_id, cluster_id),
                 app_id=app_id,
                 cluster_id=cluster_id,
@@ -190,7 +190,7 @@ class AppConfigService:
             ))
         return results
 
-    async def list_by_application(self, app_id: str) -> List[ApplicationClusterConfigResponse]:
+    async def list_by_application(self, app_id: str) -> List[ApplicationDeploymentResponse]:
         """List all clusters this application is assigned to.
 
         GAP: In the multi-repo model there is no single repo with a 'clusters/' directory.
@@ -219,7 +219,7 @@ class AppConfigService:
                 doc = next((d for d in docs if d and d.get("kind") == "Kustomization"), None)
                 source_ref = (doc or {}).get("spec", {}).get("sourceRef", {}).get("name", "")
                 external_ref = source_ref if source_ref != f"{cluster_id}-apps" else None
-                results.append(ApplicationClusterConfigResponse(
+                results.append(ApplicationDeploymentResponse(
                     id=_config_id(app_id, cluster_id),
                     app_id=app_id,
                     cluster_id=cluster_id,
@@ -227,7 +227,7 @@ class AppConfigService:
                 ))
         return results
 
-    async def create(self, spec: ApplicationClusterConfig) -> ApplicationClusterConfigResponse:
+    async def create(self, spec: ApplicationDeployment) -> ApplicationDeploymentResponse:
         from fastapi import HTTPException
 
         infra_git = self._infra_git(spec.cluster_id)
@@ -287,7 +287,7 @@ class AppConfigService:
                 reviewers=[],
             )
 
-        return ApplicationClusterConfigResponse(
+        return ApplicationDeploymentResponse(
             id=_config_id(spec.app_id, spec.cluster_id),
             app_id=spec.app_id,
             cluster_id=spec.cluster_id,
@@ -301,8 +301,8 @@ class AppConfigService:
         )
 
     async def patch(
-        self, config_id: str, patch: PatchApplicationClusterConfig
-    ) -> ApplicationClusterConfigResponse:
+        self, config_id: str, patch: PatchApplicationDeployment
+    ) -> ApplicationDeploymentResponse:
         parts = config_id.split("-", 1)
         if len(parts) != 2:
             raise ValueError(f"Invalid config id: {config_id!r}")
@@ -348,7 +348,7 @@ class AppConfigService:
                 reviewers=[],
             )
 
-        return ApplicationClusterConfigResponse(
+        return ApplicationDeploymentResponse(
             id=config_id,
             app_id=app_id,
             cluster_id=cluster_id,
@@ -358,7 +358,7 @@ class AppConfigService:
             pr_url=pr_url,
         )
 
-    async def delete(self, config_id: str) -> ApplicationClusterConfigResponse:
+    async def delete(self, config_id: str) -> ApplicationDeploymentResponse:
         parts = config_id.split("-", 1)
         if len(parts) != 2:
             raise ValueError(f"Invalid config id: {config_id!r}")
@@ -394,7 +394,7 @@ class AppConfigService:
             reviewers=[],
         )
 
-        return ApplicationClusterConfigResponse(
+        return ApplicationDeploymentResponse(
             id=config_id,
             app_id=app_id,
             cluster_id=cluster_id,

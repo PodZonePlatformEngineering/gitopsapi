@@ -6,7 +6,7 @@ import pytest
 import textwrap
 from unittest.mock import AsyncMock
 
-from gitopsgui.models.application_config import ApplicationClusterConfig, PatchApplicationClusterConfig
+from gitopsgui.models.application_config import ApplicationDeployment, PatchApplicationDeployment
 from gitopsgui.services.app_config_service import (
     AppConfigService,
     _config_id,
@@ -19,7 +19,7 @@ from gitopsgui.services.app_config_service import (
 )
 
 
-_SPEC = ApplicationClusterConfig(
+_SPEC = ApplicationDeployment(
     app_id="keycloak",
     cluster_id="security",
     chart_version_override=None,
