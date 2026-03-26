@@ -30,6 +30,7 @@ from ..models.application_config import (
     ApplicationDeployment,
     ApplicationDeploymentResponse,
     PatchApplicationDeployment,
+    HTTPRouteSpec,
 )
 from .repo_router import git_for_apps, git_for_infra, github_for_apps, github_for_infra
 
@@ -51,10 +52,21 @@ def _values_override_path(app_id: str, cluster_id: str) -> str:
 def _render_kustomization_entry(spec: ApplicationDeployment) -> str:
     """Render a Kustomization YAML document for one app→cluster assignment."""
     source_ref_name = spec.gitops_source_ref or f"{spec.cluster_id}-apps"
-    annotations_block = ""
+    annotations: dict = {}
     if spec.external_hosts:
-        hosts_csv = ",".join(spec.external_hosts)
-        annotations_block = f"  annotations:\n    gitopsapi.podzone.net/external-hosts: \"{hosts_csv}\"\n"
+        annotations["gitopsapi.podzone.net/external-hosts"] = ",".join(spec.external_hosts)
+    if spec.secret_refs:
+        annotations["gitopsapi.podzone.net/secret-refs"] = ",".join(
+            f"{r.namespace}/{r.name}" if r.namespace else r.name for r in spec.secret_refs
+        )
+    if spec.config_map_refs:
+        annotations["gitopsapi.podzone.net/configmap-refs"] = ",".join(
+            f"{r.namespace}/{r.name}" if r.namespace else r.name for r in spec.config_map_refs
+        )
+    annotations_block = ""
+    if annotations:
+        lines = "\n".join(f'    {k}: "{v}"' for k, v in annotations.items())
+        annotations_block = f"  annotations:\n{lines}\n"
     return (
         f"---\n"
         f"apiVersion: kustomize.toolkit.fluxcd.io/v1\n"
@@ -73,6 +85,41 @@ def _render_kustomization_entry(spec: ApplicationDeployment) -> str:
         f"  path: ./{_APPS_BASE}/{spec.app_id}\n"
         f"  prune: true\n"
     )
+
+
+def _render_httproute(app_id: str, cluster_id: str, hosts: List[str], route: HTTPRouteSpec) -> str:
+    """Render a Gateway API HTTPRoute manifest for an application deployment."""
+    hostnames_block = "\n".join(f'    - "{h}"' for h in hosts)
+    return (
+        f"---\n"
+        f"apiVersion: gateway.networking.k8s.io/v1\n"
+        f"kind: HTTPRoute\n"
+        f"metadata:\n"
+        f"  name: {app_id}-{cluster_id}\n"
+        f"  namespace: {app_id}\n"
+        f"  labels:\n"
+        f"    app: {app_id}\n"
+        f"    gitopsapi.podzone.net/cluster: {cluster_id}\n"
+        f"spec:\n"
+        f"  parentRefs:\n"
+        f"    - name: {route.gateway_name}\n"
+        f"      namespace: {route.gateway_namespace}\n"
+        f"      kind: Gateway\n"
+        f"  hostnames:\n"
+        f"{hostnames_block}\n"
+        f"  rules:\n"
+        f"    - matches:\n"
+        f"        - path:\n"
+        f"            type: PathPrefix\n"
+        f"            value: {route.path_prefix}\n"
+        f"      backendRefs:\n"
+        f"        - name: {app_id}\n"
+        f"          port: {route.port}\n"
+    )
+
+
+def _httproute_path(app_id: str, cluster_id: str) -> str:
+    return f"{_APPS_BASE}/{app_id}/{app_id}-httproute-{cluster_id}.yaml"
 
 
 def _find_kustomization_block(content: str, app_id: str) -> Optional[str]:
@@ -268,21 +315,49 @@ class AppConfigService:
             reviewers=[],
         )
 
-        # Values override goes to {cluster}-apps repo as a separate PR
+        # Values override and HTTPRoute go to {cluster}-apps repo as a separate PR
         values_pr_url = None
-        if spec.values_override:
+        needs_apps_pr = spec.values_override or (spec.external_hosts and spec.http_route)
+        if needs_apps_pr:
             apps_git = self._apps_git(spec.cluster_id)
             apps_gh = self._apps_gh(spec.cluster_id)
             values_branch = f"app-config/values-{spec.app_id}-{spec.cluster_id}-{uuid.uuid4().hex[:8]}"
             await apps_git.create_branch(values_branch)
-            override_path = _values_override_path(spec.app_id, spec.cluster_id)
-            await apps_git.write_file(override_path, spec.values_override)
-            await apps_git.commit(f"chore: values override {spec.app_id} on {spec.cluster_id}")
+
+            if spec.values_override:
+                override_path = _values_override_path(spec.app_id, spec.cluster_id)
+                await apps_git.write_file(override_path, spec.values_override)
+
+            if spec.external_hosts and spec.http_route:
+                httproute_yaml = _render_httproute(
+                    spec.app_id, spec.cluster_id, spec.external_hosts, spec.http_route
+                )
+                await apps_git.write_file(
+                    _httproute_path(spec.app_id, spec.cluster_id), httproute_yaml
+                )
+
+            pr_body_parts = [
+                f"Adds per-cluster manifests for `{spec.app_id}` on `{spec.cluster_id}`.\n"
+            ]
+            if spec.values_override:
+                pr_body_parts.append("- Values override")
+            if spec.external_hosts and spec.http_route:
+                pr_body_parts.append(
+                    f"- HTTPRoute: {', '.join(spec.external_hosts)} → {spec.app_id}:{spec.http_route.port}"
+                )
+            if spec.secret_refs:
+                names = ", ".join(r.name for r in spec.secret_refs)
+                pr_body_parts.append(f"- Required secrets: {names}")
+            if spec.config_map_refs:
+                names = ", ".join(r.name for r in spec.config_map_refs)
+                pr_body_parts.append(f"- Required configmaps: {names}")
+
+            await apps_git.commit(f"chore: app manifests {spec.app_id} on {spec.cluster_id}")
             await apps_git.push()
             values_pr_url = await apps_gh.create_pr(
                 branch=values_branch,
-                title=f"Values override: {spec.app_id} on {spec.cluster_id}",
-                body=f"Adds per-cluster values override for `{spec.app_id}` on `{spec.cluster_id}`.\n",
+                title=f"App manifests: {spec.app_id} on {spec.cluster_id}",
+                body="\n".join(pr_body_parts),
                 labels=["application-config", f"cluster:{spec.cluster_id}"],
                 reviewers=[],
             )
@@ -297,6 +372,9 @@ class AppConfigService:
             pipeline_stage=spec.pipeline_stage,
             gitops_source_ref=spec.gitops_source_ref,
             external_hosts=spec.external_hosts,
+            http_route=spec.http_route,
+            secret_refs=spec.secret_refs,
+            config_map_refs=spec.config_map_refs,
             pr_url=values_pr_url or pr_url,
         )
 
@@ -355,6 +433,9 @@ class AppConfigService:
             chart_version_override=patch.chart_version_override,
             values_override=patch.values_override or "",
             enabled=patch.enabled if patch.enabled is not None else True,
+            http_route=patch.http_route,
+            secret_refs=patch.secret_refs or [],
+            config_map_refs=patch.config_map_refs or [],
             pr_url=pr_url,
         )
 
