@@ -14,6 +14,7 @@ from gitopsgui.services.cluster_service import (
     _set_kustomization_suspended, _remove_kustomization,
     _render_cloudflared_yaml, _render_cloudflared_apps_kustomization,
     _render_cloudflared_flux_kustomization,
+    classify_cluster_changes, ChangeCategory, _dims_hash,
 )
 
 
@@ -647,3 +648,189 @@ async def test_bootstrap_cluster_returns_response():
     assert result.apps_key_id == 22
     assert result.secrets_created is False
     assert mock_dks.configure_repository_access.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# T-020: Change classification + rolling update semantics
+# ---------------------------------------------------------------------------
+
+_SPEC_BASE = ClusterSpec(
+    name="test-cluster",
+    platform=_PLATFORM,
+    vip="192.168.1.100",
+    ip_range="192.168.1.101-192.168.1.107",
+    dimensions=ClusterDimensions(
+        control_plane_count=1, worker_count=2,
+        cpu_per_node=4, memory_gb_per_node=16, boot_volume_gb=50,
+    ),
+    managed_gitops=False,
+    gitops_repo_url="https://github.com/test/repo",
+    sops_secret_ref="sops-key",
+    kubernetes_version="v1.34.2",
+)
+
+
+def test_classify_mutable_change():
+    new = _SPEC_BASE.model_copy(update={"extra_manifests": ["http://host/cilium.yaml"]})
+    result = classify_cluster_changes(_SPEC_BASE, new)
+    assert result.category == ChangeCategory.MUTABLE
+    assert result.machine_template_hash is None
+
+
+def test_classify_rolling_kubernetes_version():
+    new = _SPEC_BASE.model_copy(update={"kubernetes_version": "v1.35.0"})
+    result = classify_cluster_changes(_SPEC_BASE, new)
+    assert result.category == ChangeCategory.ROLLING
+    assert "kubernetes_version" in result.changed_fields
+    assert result.machine_template_hash is None
+
+
+def test_classify_rolling_talos_image():
+    new = _SPEC_BASE.model_copy(update={"talos_image": "factory.talos.dev/installer/abc123:v1.9.5"})
+    result = classify_cluster_changes(_SPEC_BASE, new)
+    assert result.category == ChangeCategory.ROLLING
+    assert "talos_image" in result.changed_fields
+
+
+def test_classify_immutable_cpu_change():
+    new_dims = ClusterDimensions(control_plane_count=1, worker_count=2, cpu_per_node=8, memory_gb_per_node=16, boot_volume_gb=50)
+    new = _SPEC_BASE.model_copy(update={"dimensions": new_dims})
+    result = classify_cluster_changes(_SPEC_BASE, new)
+    assert result.category == ChangeCategory.IMMUTABLE_TEMPLATE
+    assert "cpu_per_node" in result.changed_fields
+    assert result.machine_template_hash is not None
+    assert len(result.machine_template_hash) == 8
+
+
+def test_classify_immutable_memory_change():
+    new_dims = ClusterDimensions(control_plane_count=1, worker_count=2, cpu_per_node=4, memory_gb_per_node=32, boot_volume_gb=50)
+    new = _SPEC_BASE.model_copy(update={"dimensions": new_dims})
+    result = classify_cluster_changes(_SPEC_BASE, new)
+    assert result.category == ChangeCategory.IMMUTABLE_TEMPLATE
+    assert result.machine_template_hash is not None
+
+
+def test_classify_prohibited_name_change():
+    new = _SPEC_BASE.model_copy(update={"name": "renamed-cluster"})
+    result = classify_cluster_changes(_SPEC_BASE, new)
+    assert result.category == ChangeCategory.PROHIBITED
+    assert "name" in result.changed_fields
+    assert result.machine_template_hash is None
+
+
+def test_classify_prohibited_ip_range_change():
+    new = _SPEC_BASE.model_copy(update={"ip_range": "192.168.2.101-192.168.2.107"})
+    result = classify_cluster_changes(_SPEC_BASE, new)
+    assert result.category == ChangeCategory.PROHIBITED
+    assert "ip_range" in result.changed_fields
+
+
+def test_dims_hash_stable():
+    h1 = _dims_hash(_SPEC_BASE)
+    h2 = _dims_hash(_SPEC_BASE)
+    assert h1 == h2
+    assert len(h1) == 8
+
+
+def test_dims_hash_changes_with_cpu():
+    new_dims = ClusterDimensions(control_plane_count=1, worker_count=2, cpu_per_node=8, memory_gb_per_node=16, boot_volume_gb=50)
+    new = _SPEC_BASE.model_copy(update={"dimensions": new_dims})
+    assert _dims_hash(_SPEC_BASE) != _dims_hash(new)
+
+
+def test_render_values_includes_kubernetes_version():
+    spec = _SPEC_BASE.model_copy(update={"kubernetes_version": "v1.34.2"})
+    rendered = _render_values(spec)
+    assert "kubernetes_version: v1.34.2" in rendered
+
+
+def test_render_values_includes_talos_image():
+    spec = _SPEC_BASE.model_copy(update={"talos_image": "factory.talos.dev/nocloud-installer/abc:v1.9.5"})
+    rendered = _render_values(spec)
+    assert "image: factory.talos.dev/nocloud-installer/abc:v1.9.5" in rendered
+
+
+def test_render_values_machine_template_suffix_on_cat1():
+    rendered = _render_values(_SPEC_BASE, machine_template_hash="abc12345")
+    assert "machine_template_suffix: controlplane-abc12345" in rendered
+    assert "machine_template_suffix: worker-abc12345" in rendered
+
+
+def test_render_values_no_machine_template_suffix_by_default():
+    rendered = _render_values(_SPEC_BASE)
+    assert "machine_template_suffix" not in rendered
+
+
+def test_render_values_controlplane_dimensions():
+    cp_dims = ClusterDimensions(control_plane_count=3, worker_count=0, cpu_per_node=4, memory_gb_per_node=8, boot_volume_gb=40)
+    spec = _SPEC_BASE.model_copy(update={"controlplane_dimensions": cp_dims})
+    rendered = _render_values(spec)
+    assert "controlplane_dimensions" in rendered
+
+
+def test_classify_controlplane_dimensions_immutable():
+    cp_dims = ClusterDimensions(control_plane_count=3, worker_count=0, cpu_per_node=8, memory_gb_per_node=32, boot_volume_gb=40)
+    new = _SPEC_BASE.model_copy(update={"controlplane_dimensions": cp_dims})
+    result = classify_cluster_changes(_SPEC_BASE, new)
+    assert result.category == ChangeCategory.IMMUTABLE_TEMPLATE
+
+
+@pytest.mark.asyncio
+async def test_update_cluster_cat4_raises_422():
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._gh = AsyncMock()
+
+    existing_response = MagicMock()
+    existing_response.spec = _SPEC_BASE
+    svc.get_cluster = AsyncMock(return_value=existing_response)
+
+    new = _SPEC_BASE.model_copy(update={"name": "renamed"})
+
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        await svc.update_cluster("test-cluster", new)
+    assert exc.value.status_code == 422
+    assert "name" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_update_cluster_cat1_includes_hash_in_pr():
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._gh = AsyncMock(return_value="https://github.com/test/pr/1")
+
+    existing_response = MagicMock()
+    existing_response.spec = _SPEC_BASE
+    svc.get_cluster = AsyncMock(return_value=existing_response)
+
+    new_dims = ClusterDimensions(control_plane_count=1, worker_count=2, cpu_per_node=8, memory_gb_per_node=16, boot_volume_gb=50)
+    new = _SPEC_BASE.model_copy(update={"dimensions": new_dims})
+
+    svc._gh.create_pr = AsyncMock(return_value="https://github.com/test/pr/1")
+    await svc.update_cluster("test-cluster", new)
+
+    written_values = svc._git.write_file.call_args[0][1]
+    assert "machine_template_suffix" in written_values
+
+    pr_kwargs = svc._gh.create_pr.call_args[1]
+    assert "Cat 1" in pr_kwargs["title"]
+    assert "Cat 1" in pr_kwargs["body"]
+
+
+@pytest.mark.asyncio
+async def test_update_cluster_cat3_warns_in_pr():
+    svc = ClusterService()
+    svc._git = AsyncMock()
+
+    existing_response = MagicMock()
+    existing_response.spec = _SPEC_BASE
+    svc.get_cluster = AsyncMock(return_value=existing_response)
+
+    new = _SPEC_BASE.model_copy(update={"kubernetes_version": "v1.35.0"})
+    svc._gh.create_pr = AsyncMock(return_value="https://github.com/test/pr/1")
+    await svc.update_cluster("test-cluster", new)
+
+    pr_kwargs = svc._gh.create_pr.call_args[1]
+    assert "Cat 3" in pr_kwargs["title"]
+    assert "Rolling" in pr_kwargs["body"] or "rolling" in pr_kwargs["body"]

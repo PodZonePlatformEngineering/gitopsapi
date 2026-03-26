@@ -54,7 +54,10 @@ class ClusterSpec(BaseModel):
     platform: Optional[PlatformSpec] = None  # null for externally-managed clusters (managed_gitops=False)
     vip: str
     ip_range: str
-    dimensions: ClusterDimensions
+    dimensions: ClusterDimensions  # worker node dimensions (and control plane if controlplane_dimensions not set)
+    controlplane_dimensions: Optional[ClusterDimensions] = None  # if set, control planes use these dims; workers use dimensions
+    kubernetes_version: Optional[str] = None  # e.g. "v1.34.2" — Cat 3 change (rolling node replacement)
+    talos_image: Optional[str] = None  # factory image URL — Cat 3 change (rolling OS update)
     managed_gitops: bool = True  # TR-039: platform creates/manages {cluster}-infra and {cluster}-apps repos
     gitops_repo_url: Optional[str] = None  # required when managed_gitops=False; derived when managed_gitops=True
     sops_secret_ref: str

@@ -8,10 +8,14 @@ Gitops repo layout:
 Writes go via feature branch + PR labelled 'cluster' + stage label.
 """
 
+import hashlib
+import json
 import os
 import textwrap
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import IntEnum
 from typing import List, Optional
 
 import yaml
@@ -38,6 +42,128 @@ _MGMT_CLUSTERS_PATH = "clusters/management/clusters.yaml"
 # Reviewers determined by target (cluster changes always need cluster_operator approval)
 _CLUSTER_REVIEWERS: List[str] = []  # populated from env/config at runtime
 _CLUSTER_STAGE_LABEL = "stage:production"
+
+
+# ---------------------------------------------------------------------------
+# Change classification — Cat 1–4
+# ---------------------------------------------------------------------------
+#
+# Cat 1 — Immutable machine template fields: require new ProxmoxMachineTemplate
+#          (hash-based suffix via cluster-chart machine_template_suffix value).
+#          All other field changes may be combined in the same PR.
+# Cat 2 — Mutable cluster fields: updated in-place via values.yaml PR.
+# Cat 3 — Rolling update fields: kubernetes_version, talos_image.
+#          Triggers node-by-node replacement; accepted but PR body warns operator.
+# Cat 4 — Prohibited on live cluster: name, ip_range, platform.type change.
+#          Rejected with HTTP 422.
+
+class ChangeCategory(IntEnum):
+    MUTABLE = 2
+    ROLLING = 3
+    IMMUTABLE_TEMPLATE = 1
+    PROHIBITED = 4
+
+
+# Fields that map to ProxmoxMachineTemplate (immutable in CAPI)
+_IMMUTABLE_DIMS = {"cpu_per_node", "memory_gb_per_node", "boot_volume_gb"}
+_IMMUTABLE_PLATFORM = {"type", "talos_template"}  # talos_template.vmid / .node
+
+
+@dataclass
+class ChangeClassification:
+    category: ChangeCategory
+    changed_fields: List[str] = field(default_factory=list)
+    machine_template_hash: Optional[str] = None  # set for Cat 1; used as machine_template_suffix in values
+
+
+def _dims_hash(spec: "ClusterSpec") -> str:
+    """Stable hash of the immutable dimension fields for machine template naming."""
+    cp_dims = spec.controlplane_dimensions or spec.dimensions
+    payload = {
+        "worker_cpu": spec.dimensions.cpu_per_node,
+        "worker_mem": spec.dimensions.memory_gb_per_node,
+        "worker_disk": spec.dimensions.boot_volume_gb,
+        "cp_cpu": cp_dims.cpu_per_node,
+        "cp_mem": cp_dims.memory_gb_per_node,
+        "cp_disk": cp_dims.boot_volume_gb,
+        "talos_vmid": spec.platform.talos_template.vmid if spec.platform else None,
+        "talos_node": (
+            spec.platform.talos_template.node or (spec.platform.nodes[0] if spec.platform else None)
+        ) if spec.platform else None,
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    return digest[:8]
+
+
+def classify_cluster_changes(existing: "ClusterSpec", new: "ClusterSpec") -> ChangeClassification:
+    """Classify the changes from existing to new ClusterSpec into a single category.
+
+    Returns the highest-severity category found across all changed fields.
+    Cat 4 > Cat 1 > Cat 3 > Cat 2.
+    """
+    changed: List[str] = []
+    category = ChangeCategory.MUTABLE
+
+    # Cat 4: prohibited changes
+    if existing.name != new.name:
+        changed.append("name")
+        category = ChangeCategory.PROHIBITED
+    if existing.ip_range != new.ip_range:
+        changed.append("ip_range")
+        category = ChangeCategory.PROHIBITED
+    if (existing.platform and new.platform) and existing.platform.type != new.platform.type:
+        changed.append("platform.type")
+        category = ChangeCategory.PROHIBITED
+
+    if category == ChangeCategory.PROHIBITED:
+        return ChangeClassification(category=category, changed_fields=changed)
+
+    # Cat 1: immutable machine template fields
+    def _dims_changed(a, b) -> List[str]:
+        if a is None and b is None:
+            return []
+        a = a or existing.dimensions
+        b = b or new.dimensions
+        return [f for f in _IMMUTABLE_DIMS if getattr(a, f) != getattr(b, f)]
+
+    immutable_changes = (
+        _dims_changed(existing.dimensions, new.dimensions)
+        + [f"controlplane_dimensions.{f}" for f in _dims_changed(
+            existing.controlplane_dimensions, new.controlplane_dimensions
+        )]
+    )
+    if existing.platform and new.platform:
+        old_t, new_t = existing.platform.talos_template, new.platform.talos_template
+        if old_t.vmid != new_t.vmid:
+            immutable_changes.append("platform.talos_template.vmid")
+        old_node = old_t.node or existing.platform.nodes[0]
+        new_node = new_t.node or new.platform.nodes[0]
+        if old_node != new_node:
+            immutable_changes.append("platform.talos_template.node")
+
+    if immutable_changes:
+        changed.extend(immutable_changes)
+        category = ChangeCategory.IMMUTABLE_TEMPLATE
+
+    # Cat 3: rolling update fields
+    rolling_changes = []
+    if existing.kubernetes_version != new.kubernetes_version:
+        rolling_changes.append("kubernetes_version")
+    if existing.talos_image != new.talos_image:
+        rolling_changes.append("talos_image")
+    if rolling_changes:
+        changed.extend(rolling_changes)
+        if category == ChangeCategory.MUTABLE:
+            category = ChangeCategory.ROLLING
+
+    # Cat 2: everything else (mutable) — no action needed beyond a values PR
+
+    hash_val = _dims_hash(new) if category == ChangeCategory.IMMUTABLE_TEMPLATE else None
+    return ChangeClassification(
+        category=category,
+        changed_fields=changed,
+        machine_template_hash=hash_val,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -83,28 +209,50 @@ def _kustomizeconfig_path(name: str) -> str:
     return f"{_CLUSTER_CHARTS_BASE}/{name}/kustomizeconfig.yaml"
 
 
-def _render_values(spec: ClusterSpec) -> str:
+def _render_values(spec: ClusterSpec, machine_template_hash: Optional[str] = None) -> str:
     """Render cluster-chart values YAML.
 
     Matches the schema used by actual cluster-chart values files:
       cluster.name, network.ip_ranges, controlplane.*, worker.machine_count
     Top-level GitOpsAPI metadata fields (platform, vip, etc.) are also stored
     here for roundtrip fidelity when the API reads back a cluster spec.
+
+    machine_template_hash: if set (Cat 1 change), written as
+      controlplane.machine_template_suffix and worker.machine_template_suffix
+      so the cluster-chart generates ProxmoxMachineTemplates with new names.
     """
+    cp_dims = spec.controlplane_dimensions or spec.dimensions
     # cluster-chart consumed fields
     data: dict = {
         "cluster": {"name": spec.name},
         "network": {"ip_ranges": [spec.ip_range]},
         "controlplane": {
             "endpoint_ip": spec.vip,
-            "machine_count": spec.dimensions.control_plane_count,
+            "machine_count": cp_dims.control_plane_count,
+            "num_cores": cp_dims.cpu_per_node,
+            "num_sockets": 1,
+            "memory_mib": cp_dims.memory_gb_per_node * 1024,
+            "boot_volume_size": cp_dims.boot_volume_gb,
         },
-        "worker": {"machine_count": spec.dimensions.worker_count},
+        "worker": {
+            "machine_count": spec.dimensions.worker_count,
+            "num_cores": spec.dimensions.cpu_per_node,
+            "num_sockets": 1,
+            "memory_mib": spec.dimensions.memory_gb_per_node * 1024,
+            "boot_volume_size": spec.dimensions.boot_volume_gb,
+        },
     }
     if spec.extra_manifests:
         data["controlplane"]["extra_manifests"] = spec.extra_manifests
     if spec.allow_scheduling_on_control_planes:
         data["controlplane"]["allow_scheduling_on_control_planes"] = True
+    if spec.kubernetes_version:
+        data["cluster"]["kubernetes_version"] = spec.kubernetes_version
+    if spec.talos_image:
+        data["cluster"]["image"] = spec.talos_image
+    if machine_template_hash:
+        data["controlplane"]["machine_template_suffix"] = f"controlplane-{machine_template_hash}"
+        data["worker"]["machine_template_suffix"] = f"worker-{machine_template_hash}"
 
     # proxmox: section consumed by cluster-chart templates
     if spec.platform and spec.platform.type == "proxmox":
@@ -161,6 +309,18 @@ def _render_values(spec: ClusterSpec) -> str:
         "memory_gb_per_node": spec.dimensions.memory_gb_per_node,
         "boot_volume_gb": spec.dimensions.boot_volume_gb,
     }
+    if spec.controlplane_dimensions:
+        data["controlplane_dimensions"] = {
+            "control_plane_count": spec.controlplane_dimensions.control_plane_count,
+            "worker_count": spec.controlplane_dimensions.worker_count,
+            "cpu_per_node": spec.controlplane_dimensions.cpu_per_node,
+            "memory_gb_per_node": spec.controlplane_dimensions.memory_gb_per_node,
+            "boot_volume_gb": spec.controlplane_dimensions.boot_volume_gb,
+        }
+    if spec.kubernetes_version:
+        data["kubernetes_version"] = spec.kubernetes_version
+    if spec.talos_image:
+        data["talos_image"] = spec.talos_image
     return yaml.dump(data, default_flow_style=False)
 
 
@@ -411,17 +571,51 @@ class ClusterService:
         return ClusterResponse(name=spec.name, spec=spec, pr_url=pr_url)
 
     async def update_cluster(self, name: str, spec: ClusterSpec) -> ClusterResponse:
+        from fastapi import HTTPException
+
+        # Read existing spec for diff classification
+        existing = await self.get_cluster(name)
+        if existing is None:
+            raise HTTPException(status_code=404, detail=f"Cluster {name!r} not found")
+
+        classification = classify_cluster_changes(existing.spec, spec)
+
+        if classification.category == ChangeCategory.PROHIBITED:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Prohibited change(s) on live cluster: {', '.join(classification.changed_fields)}. "
+                    f"These fields cannot be modified without decommissioning and reprovisioning the cluster."
+                ),
+            )
+
+        machine_hash = classification.machine_template_hash
         branch = f"cluster/update-{name}-{uuid.uuid4().hex[:8]}"
         await self._git.create_branch(branch)
-
-        await self._git.write_file(_cluster_values_path(name), _render_values(spec))
+        await self._git.write_file(_cluster_values_path(name), _render_values(spec, machine_hash))
         await self._git.commit(f"chore: update cluster {name}")
         await self._git.push()
 
+        body_lines = [f"Cluster spec update for `{name}`."]
+        if classification.changed_fields:
+            body_lines.append(f"\n**Changed fields:** {', '.join(classification.changed_fields)}")
+        if classification.category == ChangeCategory.IMMUTABLE_TEMPLATE:
+            body_lines.append(
+                f"\n⚠️ **Cat 1 — Immutable template change.** "
+                f"New ProxmoxMachineTemplates will be created with suffix `-{machine_hash}`. "
+                f"Existing nodes are not replaced automatically — rolling replacement must be triggered manually."
+            )
+        elif classification.category == ChangeCategory.ROLLING:
+            body_lines.append(
+                f"\n⚠️ **Cat 3 — Rolling update.** "
+                f"CAPI will perform a rolling node replacement for: "
+                f"{', '.join(classification.changed_fields)}."
+            )
+
         pr_url = await self._gh.create_pr(
             branch=branch,
-            title=f"Update cluster: {name}",
-            body=f"Cluster spec update for `{name}`.",
+            title=f"Update cluster: {name} (Cat {classification.category})",
+            body="\n".join(body_lines),
             labels=["cluster", _CLUSTER_STAGE_LABEL],
             reviewers=_CLUSTER_REVIEWERS,
         )
