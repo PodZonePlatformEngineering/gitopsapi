@@ -834,3 +834,99 @@ async def test_update_cluster_cat3_warns_in_pr():
     pr_kwargs = svc._gh.create_pr.call_args[1]
     assert "Cat 3" in pr_kwargs["title"]
     assert "Rolling" in pr_kwargs["body"] or "rolling" in pr_kwargs["body"]
+
+
+# ---------------------------------------------------------------------------
+# StorageSpec model and rendering (T-025)
+# ---------------------------------------------------------------------------
+
+def test_storage_omitted_when_none():
+    """When storage is None, no storage: key in rendered values."""
+    out = _render_values(_SPEC)
+    assert "storage:" not in out
+
+
+def test_storage_disabled_rendered():
+    """storage.enabled=False renders storage block with enabled: false."""
+    from gitopsgui.models.cluster import StorageSpec
+    spec = _SPEC.model_copy(update={"storage": StorageSpec(enabled=False)})
+    out = _render_values(spec)
+    assert "storage:" in out
+    assert "enabled: false" in out
+
+
+def test_storage_enabled_with_size_rendered():
+    """storage.enabled=True with size renders full storage block."""
+    from gitopsgui.models.cluster import StorageSpec
+    spec = _SPEC.model_copy(update={"storage": StorageSpec(enabled=True, size=50)})
+    out = _render_values(spec)
+    assert "storage:" in out
+    assert "enabled: true" in out
+    assert "size: 50" in out
+
+
+def test_storage_size_omitted_when_none():
+    """When storage.size is None, storage block has no size key."""
+    import yaml
+    from gitopsgui.models.cluster import StorageSpec
+    spec = _SPEC.model_copy(update={"storage": StorageSpec(enabled=False)})
+    parsed = yaml.safe_load(_render_values(spec))
+    assert "size" not in parsed.get("storage", {})
+
+
+def test_classify_storage_enabled_change_is_cat1():
+    """Changing storage.enabled is Cat 1 (machine template change)."""
+    from gitopsgui.models.cluster import StorageSpec
+    existing = _SPEC_BASE
+    new = _SPEC_BASE.model_copy(update={"storage": StorageSpec(enabled=False)})
+    result = classify_cluster_changes(existing, new)
+    assert result.category == ChangeCategory.IMMUTABLE_TEMPLATE
+    assert "storage.enabled" in result.changed_fields
+
+
+def test_classify_storage_size_change_is_cat1():
+    """Changing storage.size is Cat 1 (machine template change)."""
+    from gitopsgui.models.cluster import StorageSpec
+    existing = _SPEC_BASE.model_copy(update={"storage": StorageSpec(enabled=True, size=20)})
+    new = _SPEC_BASE.model_copy(update={"storage": StorageSpec(enabled=True, size=50)})
+    result = classify_cluster_changes(existing, new)
+    assert result.category == ChangeCategory.IMMUTABLE_TEMPLATE
+    assert "storage.size" in result.changed_fields
+
+
+def test_classify_storage_unchanged_is_cat2():
+    """Same storage spec is Cat 2 (no template change)."""
+    from gitopsgui.models.cluster import StorageSpec
+    existing = _SPEC_BASE.model_copy(update={"storage": StorageSpec(enabled=True, size=20)})
+    new = _SPEC_BASE.model_copy(update={"storage": StorageSpec(enabled=True, size=20)})
+    result = classify_cluster_changes(existing, new)
+    assert result.category == ChangeCategory.MUTABLE
+
+
+def test_dims_hash_differs_for_storage_enabled_vs_disabled():
+    """_dims_hash produces different values when storage.enabled changes."""
+    from gitopsgui.models.cluster import StorageSpec
+    spec_with = _SPEC.model_copy(update={"storage": StorageSpec(enabled=True, size=20)})
+    spec_without = _SPEC.model_copy(update={"storage": StorageSpec(enabled=False)})
+    assert _dims_hash(spec_with) != _dims_hash(spec_without)
+
+
+def test_musings_cluster_storage_disabled():
+    """musings test cluster: single node, storage disabled, no size rendered."""
+    from gitopsgui.models.cluster import StorageSpec
+    musings = ClusterSpec(
+        name="musings",
+        vip="192.168.4.230",
+        ip_range="192.168.4.231-192.168.4.233",
+        dimensions=ClusterDimensions(
+            control_plane_count=1, worker_count=0,
+            cpu_per_node=2, memory_gb_per_node=4, boot_volume_gb=10,
+        ),
+        allow_scheduling_on_control_planes=True,
+        storage=StorageSpec(enabled=False),
+        sops_secret_ref="sops-age",
+    )
+    import yaml
+    parsed = yaml.safe_load(_render_values(musings))
+    assert parsed["storage"]["enabled"] is False
+    assert "size" not in parsed["storage"]

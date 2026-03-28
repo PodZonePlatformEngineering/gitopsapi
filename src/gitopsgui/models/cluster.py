@@ -18,6 +18,11 @@ class IngressConnectorSpec(BaseModel):
     )
 
 
+class StorageSpec(BaseModel):
+    enabled: bool = True          # when False, Linstor/piraeus storage class provisioning is skipped
+    size: Optional[int] = None   # dedicated storage disk size in GB (Linstor data pool); None = no storage disk
+
+
 class ClusterDimensions(BaseModel):
     control_plane_count: int = 3
     worker_count: int = 3
@@ -66,6 +71,7 @@ class ClusterSpec(BaseModel):
     allow_scheduling_on_control_planes: bool = False  # enables Talos allowSchedulingOnControlPlanes; required when worker_count=0
     external_hosts: List[str] = []  # FQDNs served externally via this cluster's Gateway; drives cert-manager certs + Gateway listeners at provisioning time
     ingress_connector: Optional[IngressConnectorSpec] = None  # CC-068: cloudflared tunnel connector config
+    storage: Optional[StorageSpec] = None  # T-025: storage class config; None = default (enabled, no dedicated disk)
 
 
 class ClusterSuspendResponse(BaseModel):

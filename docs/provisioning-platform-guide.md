@@ -119,6 +119,10 @@ Full `ClusterSpec` example:
   },
   "managed_gitops": true,
   "sops_secret_ref": "gitopsapi-age-key",
+  "storage": {
+    "enabled": true,
+    "size": 50
+  },
   "extra_manifests": [],
   "bastion": {
     "hostname": "<bastion-hostname>",
@@ -197,6 +201,36 @@ Each hypervisor needs a Talos VM template for CAPI to clone. Template attributes
 | `template_node` | Proxmox node where the template resides |
 
 Template lifecycle (upload, version update) is a manual operation performed on the hypervisor. See [Talos documentation](https://www.talos.dev) for image download and import steps.
+
+---
+
+## ClusterSpec — storage field
+
+`storage` is optional. When omitted, Linstor/piraeus storage class provisioning follows
+the default shared-infra behaviour (enabled, no dedicated data disk).
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `storage.enabled` | bool | `true` | When `false`, Linstor/piraeus storage class provisioning is skipped. Suitable for single-node or minimal clusters that don't need persistent storage classes (e.g. "musings"). Cat 1 change — requires new ProxmoxMachineTemplate. |
+| `storage.size` | int (GB) | `null` | Size of the dedicated Linstor data disk added to each worker VM. The Linstor pool size (and therefore storage class capacity) is derived from this value. When `null`, no dedicated storage disk is added. Cat 1 change — requires new ProxmoxMachineTemplate. |
+
+**Minimal cluster example (no storage):**
+
+```json
+{
+  "name": "musings",
+  "dimensions": {
+    "control_plane_count": 1,
+    "worker_count": 0,
+    "cpu_per_node": 2,
+    "memory_gb_per_node": 4,
+    "boot_volume_gb": 10
+  },
+  "allow_scheduling_on_control_planes": true,
+  "storage": { "enabled": false },
+  "sops_secret_ref": "sops-age"
+}
+```
 
 ---
 

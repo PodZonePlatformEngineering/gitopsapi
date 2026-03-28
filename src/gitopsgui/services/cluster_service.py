@@ -90,6 +90,8 @@ def _dims_hash(spec: "ClusterSpec") -> str:
         "talos_node": (
             spec.platform.talos_template.node or (spec.platform.nodes[0] if spec.platform else None)
         ) if spec.platform else None,
+        "storage_enabled": spec.storage.enabled if spec.storage else True,
+        "storage_size": spec.storage.size if spec.storage else None,
     }
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     return digest[:8]
@@ -140,6 +142,18 @@ def classify_cluster_changes(existing: "ClusterSpec", new: "ClusterSpec") -> Cha
         new_node = new_t.node or new.platform.nodes[0]
         if old_node != new_node:
             immutable_changes.append("platform.talos_template.node")
+
+    # Cat 1: storage spec changes require new machine template (disk config changes)
+    old_storage = existing.storage
+    new_storage = new.storage
+    old_enabled = old_storage.enabled if old_storage else True
+    new_enabled = new_storage.enabled if new_storage else True
+    old_size = old_storage.size if old_storage else None
+    new_size = new_storage.size if new_storage else None
+    if old_enabled != new_enabled:
+        immutable_changes.append("storage.enabled")
+    if old_size != new_size:
+        immutable_changes.append("storage.size")
 
     if immutable_changes:
         changed.extend(immutable_changes)
@@ -289,6 +303,12 @@ def _render_values(spec: ClusterSpec, machine_template_hash: Optional[str] = Non
     data["allow_scheduling_on_control_planes"] = spec.allow_scheduling_on_control_planes
     if spec.external_hosts:
         data["external_hosts"] = spec.external_hosts
+    if spec.storage is not None:
+        storage_data: dict = {"enabled": spec.storage.enabled}
+        if spec.storage.size is not None:
+            storage_data["size"] = spec.storage.size
+        data["storage"] = storage_data
+
     if spec.ingress_connector:
         ic = spec.ingress_connector
         data["ingress_connector"] = {
