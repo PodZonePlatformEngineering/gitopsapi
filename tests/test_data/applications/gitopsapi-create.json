@@ -7,6 +7,6 @@
   "helm_repo_url": "https://motttt.github.io/gitopsapi",
   "chart_name": "gitopsapi",
   "chart_version": "0.1.0",
-  "values_yaml": "image:\n  repository: harbor.podzone.cloud/gitopsapi/gitopsapi\n  tag: \"latest\"\n  pullPolicy: IfNotPresent\ngitops:\n  repoUrl: \"git@github.com:your-org/cluster-charts.git\"\n  branch: main\n  githubRepo: \"your-org/cluster-charts\"\nsecrets:\n  sshKeySecret: gitopsapi-ssh-key\n  githubTokenSecret: gitopsapi-github-token\n  mgmtKubeconfigSecret: gitopsapi-mgmt-kubeconfig\n  ageKeySecret: gitopsapi-age-key\nexpose:\n  hostname: gitopsgui.podzone.cloud\n  gatewayName: gateway\n  gatewayNamespace: kube-system\n  tlsSecretName: gitopsgui-tls\n",
+  "values_yaml": "image:\n  repository: ghcr.io/motttt/gitopsapi\n  tag: \"latest\"\n  pullPolicy: IfNotPresent\ngitops:\n  repoUrl: \"git@github.com:your-org/cluster-charts.git\"\n  branch: main\n  githubRepo: \"your-org/cluster-charts\"\nsecrets:\n  sshKeySecret: gitopsapi-ssh-key\n  githubTokenSecret: gitopsapi-github-token\n  mgmtKubeconfigSecret: gitopsapi-mgmt-kubeconfig\n  ageKeySecret: gitopsapi-age-key\nexpose:\n  hostname: gitopsgui.podzone.cloud\n  gatewayName: gateway\n  gatewayNamespace: kube-system\n  tlsSecretName: gitopsgui-tls\n",
   "app_repo_url": "git@github.com:PodZone/gitopsapi.git"
 }

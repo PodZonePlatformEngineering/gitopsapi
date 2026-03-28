@@ -21,6 +21,15 @@ from ..models.pr import PRDetail, ReviewerStatus
 
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "")  # e.g. "org/cluster09-gitops"
+# Optional: set to Forgejo/self-hosted GitHub API base URL, e.g.
+# "https://git.podzone.cloud/api/v1" for Forgejo (GitHub API v3-compatible).
+# When unset, uses github.com. Forgejo PAT auth uses the same Bearer token scheme.
+GITOPS_FORGE_API_URL = os.environ.get("GITOPS_FORGE_API_URL", "")
+# SSH host derived from forge URL, or github.com. Used for SSH clone URLs.
+# e.g. GITOPS_FORGE_API_URL=https://git.podzone.cloud/api/v1 → git.podzone.cloud
+_FORGE_SSH_HOST = (
+    GITOPS_FORGE_API_URL.split("/")[2] if GITOPS_FORGE_API_URL else "github.com"
+)
 
 # Local dev flag — use LocalPRStore instead of calling GitHub API
 SKIP_GITHUB = os.environ.get("GITOPS_SKIP_GITHUB", "") == "1"
@@ -152,6 +161,8 @@ def _local_pr_to_detail(pr: dict) -> PRDetail:
 # ---------------------------------------------------------------------------
 
 def _client() -> Github:
+    if GITOPS_FORGE_API_URL:
+        return Github(GITHUB_TOKEN, base_url=GITOPS_FORGE_API_URL)
     return Github(GITHUB_TOKEN)
 
 
@@ -235,7 +246,7 @@ class GitHubService:
         Raises RuntimeError if the repo exists but is public (TR-032 violation).
         """
         if SKIP_GITHUB:
-            return f"git@github.com:{self._owner()}/{name}.git"
+            return f"git@{_FORGE_SSH_HOST}:{self._owner()}/{name}.git"
 
         def _run() -> str:
             gh = _client()
@@ -248,7 +259,7 @@ class GitHubService:
                         f"Repository {owner}/{name} already exists but is public — "
                         f"TR-032 requires all platform-managed repos to be private."
                     )
-                return existing.clone_url
+                return f"git@{_FORGE_SSH_HOST}:{owner}/{existing.name}.git"
             except GithubException as exc:
                 if exc.status != 404:
                     raise
@@ -260,7 +271,7 @@ class GitHubService:
                 # owner is a user (not an org)
                 user = gh.get_user()
                 repo = user.create_repo(name, description=description, private=True, auto_init=True)
-            return repo.clone_url
+            return f"git@{_FORGE_SSH_HOST}:{owner}/{repo.name}.git"
 
         return await asyncio.to_thread(_run)
 

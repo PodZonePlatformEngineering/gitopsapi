@@ -110,7 +110,7 @@ def test_render_kustomization_entry_external_source_ref():
 def test_render_kustomization_entry_external_hosts_annotation():
     spec = _SPEC.model_copy(update={"external_hosts": ["login.podzone.cloud"]})
     rendered = _render_kustomization_entry(spec)
-    assert "gitopsapi.podzone.net/external-hosts" in rendered
+    assert "gitopsapi.io/external-hosts" in rendered
     assert "login.podzone.cloud" in rendered
 
 
@@ -122,7 +122,7 @@ def test_render_kustomization_entry_multiple_external_hosts():
 
 def test_render_kustomization_entry_no_annotation_when_empty():
     rendered = _render_kustomization_entry(_SPEC)
-    assert "gitopsapi.podzone.net/external-hosts" not in rendered
+    assert "gitopsapi.io/external-hosts" not in rendered
     assert "annotations" not in rendered
 
 
@@ -176,7 +176,7 @@ _APPS_YAML_WITH_HOSTS = textwrap.dedent("""\
       name: forgejo
       namespace: flux-system
       annotations:
-        gitopsapi.podzone.net/external-hosts: "git.podzone.cloud"
+        gitopsapi.io/external-hosts: "git.podzone.cloud"
     spec:
       interval: 1h
       sourceRef:
@@ -316,7 +316,7 @@ def test_httproute_path():
 def test_render_kustomization_secret_ref_annotation():
     spec = _SPEC.model_copy(update={"secret_refs": [SecretRef(name="keycloak-db-secret")]})
     rendered = _render_kustomization_entry(spec)
-    assert "gitopsapi.podzone.net/secret-refs" in rendered
+    assert "gitopsapi.io/secret-refs" in rendered
     assert "keycloak-db-secret" in rendered
 
 
@@ -331,7 +331,7 @@ def test_render_kustomization_secret_ref_with_namespace():
 def test_render_kustomization_configmap_ref_annotation():
     spec = _SPEC.model_copy(update={"config_map_refs": [ConfigMapRef(name="keycloak-config")]})
     rendered = _render_kustomization_entry(spec)
-    assert "gitopsapi.podzone.net/configmap-refs" in rendered
+    assert "gitopsapi.io/configmap-refs" in rendered
     assert "keycloak-config" in rendered
 
 

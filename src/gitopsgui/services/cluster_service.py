@@ -20,8 +20,6 @@ from typing import List, Optional
 
 import yaml
 
-CLUSTER_CHART_REPO_URL = os.environ.get("GITOPS_CLUSTER_CHART_REPO_URL", "")
-
 from ..models.cluster import (
     ClusterSpec, ClusterResponse, ClusterStatus,
     ClusterSuspendResponse, ClusterDecommissionResponse,
@@ -34,6 +32,8 @@ from .github_service import GitHubService
 from . import repo_router
 
 CLUSTER_CHART_REPO_URL = os.environ.get("GITOPS_CLUSTER_CHART_REPO_URL", "")
+CLUSTER_CHART_REPO_NAME = os.environ.get("GITOPS_CLUSTER_CHART_REPO_NAME", "cluster-charts")
+CLUSTER_CHART_VERSION = os.environ.get("GITOPS_CLUSTER_CHART_VERSION", "0.1.20")
 
 _CLUSTER_CHARTS_BASE = "gitops/cluster-charts"
 _CLUSTERS_BASE = "clusters"
@@ -354,7 +354,7 @@ def _render_cluster_yaml(name: str) -> str:
         apiVersion: source.toolkit.fluxcd.io/v1beta2
         kind: HelmRepository
         metadata:
-          name: podzone-charts
+          name: {CLUSTER_CHART_REPO_NAME}
           namespace: flux-system
         spec:
           interval: 10m0s
@@ -372,8 +372,8 @@ def _render_cluster_yaml(name: str) -> str:
               chart: cluster-chart
               sourceRef:
                 kind: HelmRepository
-                name: podzone-charts
-              version: 0.1.20
+                name: {CLUSTER_CHART_REPO_NAME}
+              version: {CLUSTER_CHART_VERSION}
           valuesFrom:
             - kind: ConfigMap
               name: {name}-values

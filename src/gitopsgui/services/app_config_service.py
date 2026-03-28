@@ -54,13 +54,13 @@ def _render_kustomization_entry(spec: ApplicationDeployment) -> str:
     source_ref_name = spec.gitops_source_ref or f"{spec.cluster_id}-apps"
     annotations: dict = {}
     if spec.external_hosts:
-        annotations["gitopsapi.podzone.net/external-hosts"] = ",".join(spec.external_hosts)
+        annotations["gitopsapi.io/external-hosts"] = ",".join(spec.external_hosts)
     if spec.secret_refs:
-        annotations["gitopsapi.podzone.net/secret-refs"] = ",".join(
+        annotations["gitopsapi.io/secret-refs"] = ",".join(
             f"{r.namespace}/{r.name}" if r.namespace else r.name for r in spec.secret_refs
         )
     if spec.config_map_refs:
-        annotations["gitopsapi.podzone.net/configmap-refs"] = ",".join(
+        annotations["gitopsapi.io/configmap-refs"] = ",".join(
             f"{r.namespace}/{r.name}" if r.namespace else r.name for r in spec.config_map_refs
         )
     annotations_block = ""
@@ -99,7 +99,7 @@ def _render_httproute(app_id: str, cluster_id: str, hosts: List[str], route: HTT
         f"  namespace: {app_id}\n"
         f"  labels:\n"
         f"    app: {app_id}\n"
-        f"    gitopsapi.podzone.net/cluster: {cluster_id}\n"
+        f"    gitopsapi.io/cluster: {cluster_id}\n"
         f"spec:\n"
         f"  parentRefs:\n"
         f"    - name: {route.gateway_name}\n"
@@ -226,7 +226,7 @@ class AppConfigService:
                 continue
             source_ref = spec.get("sourceRef", {}).get("name", "")
             external_ref = source_ref if source_ref != f"{cluster_id}-apps" else None
-            hosts_csv = meta.get("annotations", {}).get("gitopsapi.podzone.net/external-hosts", "")
+            hosts_csv = meta.get("annotations", {}).get("gitopsapi.io/external-hosts", "")
             external_hosts = [h.strip() for h in hosts_csv.split(",") if h.strip()]
             results.append(ApplicationDeploymentResponse(
                 id=_config_id(app_id, cluster_id),
