@@ -6,20 +6,28 @@ import pytest
 import textwrap
 from unittest.mock import AsyncMock
 
-from gitopsgui.models.application_config import ApplicationClusterConfig, PatchApplicationClusterConfig
+from gitopsgui.models.application_config import (
+    ApplicationDeployment,
+    PatchApplicationDeployment,
+    HTTPRouteSpec,
+    SecretRef,
+    ConfigMapRef,
+)
 from gitopsgui.services.app_config_service import (
     AppConfigService,
     _config_id,
     _cluster_apps_path,
     _values_override_path,
     _render_kustomization_entry,
+    _render_httproute,
+    _httproute_path,
     _find_kustomization_block,
     _remove_kustomization_block,
     _comment_kustomization_block,
 )
 
 
-_SPEC = ApplicationClusterConfig(
+_SPEC = ApplicationDeployment(
     app_id="keycloak",
     cluster_id="security",
     chart_version_override=None,
@@ -266,3 +274,132 @@ async def test_delete_removes_block():
     written = svc._git.write_file.call_args[0][1]
     assert "keycloak" not in written
     assert "existing-app" in written
+
+
+# ---------------------------------------------------------------------------
+# T-021: HTTPRouteSpec, SecretRef, ConfigMapRef
+# ---------------------------------------------------------------------------
+
+_ROUTE = HTTPRouteSpec(gateway_name="podzone-gateway", gateway_namespace="kube-system", port=8080)
+
+
+def test_render_httproute_basic():
+    rendered = _render_httproute("keycloak", "security", ["login.podzone.cloud"], _ROUTE)
+    assert "kind: HTTPRoute" in rendered
+    assert "login.podzone.cloud" in rendered
+    assert "gateway_name" not in rendered  # field name must not appear verbatim
+    assert "name: podzone-gateway" in rendered
+    assert "namespace: kube-system" in rendered
+    assert "port: 8080" in rendered
+    assert "name: keycloak" in rendered
+    assert "name: keycloak-security" in rendered
+
+
+def test_render_httproute_multiple_hosts():
+    rendered = _render_httproute("keycloak", "security",
+                                 ["login.podzone.cloud", "sso.podzone.cloud"], _ROUTE)
+    assert '"login.podzone.cloud"' in rendered
+    assert '"sso.podzone.cloud"' in rendered
+
+
+def test_render_httproute_path_prefix():
+    route = HTTPRouteSpec(gateway_name="gw", gateway_namespace="ns", port=80, path_prefix="/auth")
+    rendered = _render_httproute("keycloak", "security", ["login.podzone.cloud"], route)
+    assert "value: /auth" in rendered
+
+
+def test_httproute_path():
+    assert _httproute_path("keycloak", "security") == \
+        "gitops/gitops-apps/keycloak/keycloak-httproute-security.yaml"
+
+
+def test_render_kustomization_secret_ref_annotation():
+    spec = _SPEC.model_copy(update={"secret_refs": [SecretRef(name="keycloak-db-secret")]})
+    rendered = _render_kustomization_entry(spec)
+    assert "gitopsapi.podzone.net/secret-refs" in rendered
+    assert "keycloak-db-secret" in rendered
+
+
+def test_render_kustomization_secret_ref_with_namespace():
+    spec = _SPEC.model_copy(update={
+        "secret_refs": [SecretRef(name="keycloak-db-secret", namespace="keycloak")]
+    })
+    rendered = _render_kustomization_entry(spec)
+    assert "keycloak/keycloak-db-secret" in rendered
+
+
+def test_render_kustomization_configmap_ref_annotation():
+    spec = _SPEC.model_copy(update={"config_map_refs": [ConfigMapRef(name="keycloak-config")]})
+    rendered = _render_kustomization_entry(spec)
+    assert "gitopsapi.podzone.net/configmap-refs" in rendered
+    assert "keycloak-config" in rendered
+
+
+def test_render_kustomization_no_secret_annotation_when_empty():
+    rendered = _render_kustomization_entry(_SPEC)
+    assert "secret-refs" not in rendered
+    assert "configmap-refs" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_create_writes_httproute_when_hosts_and_route_set():
+    svc = _svc()
+    svc._git.read_file = AsyncMock(return_value="")
+    svc._gh.create_pr = AsyncMock(return_value="https://github.com/test/repo/pull/10")
+
+    spec = ApplicationDeployment(
+        app_id="keycloak",
+        cluster_id="security",
+        external_hosts=["login.podzone.cloud"],
+        http_route=_ROUTE,
+    )
+    result = await svc.create(spec)
+
+    # write_file called twice: infra apps.yaml + httproute
+    write_calls = svc._git.write_file.call_args_list
+    paths = [c[0][0] for c in write_calls]
+    assert any("httproute" in p for p in paths), f"No httproute write found in {paths}"
+    httproute_content = next(c[0][1] for c in write_calls if "httproute" in c[0][0])
+    assert "kind: HTTPRoute" in httproute_content
+    assert "login.podzone.cloud" in httproute_content
+    assert result.http_route is not None
+    assert result.external_hosts == ["login.podzone.cloud"]
+
+
+@pytest.mark.asyncio
+async def test_create_no_httproute_when_no_route_spec():
+    svc = _svc()
+    svc._git.read_file = AsyncMock(return_value="")
+    svc._gh.create_pr = AsyncMock(return_value="https://github.com/test/repo/pull/10")
+
+    spec = ApplicationDeployment(
+        app_id="keycloak",
+        cluster_id="security",
+        external_hosts=["login.podzone.cloud"],
+        # http_route not set
+    )
+    await svc.create(spec)
+
+    write_calls = svc._git.write_file.call_args_list
+    paths = [c[0][0] for c in write_calls]
+    assert not any("httproute" in p for p in paths)
+
+
+@pytest.mark.asyncio
+async def test_create_includes_secret_refs_in_response():
+    svc = _svc()
+    svc._git.read_file = AsyncMock(return_value="")
+    svc._gh.create_pr = AsyncMock(return_value="https://github.com/test/repo/pull/10")
+
+    spec = ApplicationDeployment(
+        app_id="keycloak",
+        cluster_id="security",
+        secret_refs=[SecretRef(name="keycloak-db-secret")],
+        config_map_refs=[ConfigMapRef(name="keycloak-config")],
+    )
+    result = await svc.create(spec)
+
+    assert len(result.secret_refs) == 1
+    assert result.secret_refs[0].name == "keycloak-db-secret"
+    assert len(result.config_map_refs) == 1
+    assert result.config_map_refs[0].name == "keycloak-config"

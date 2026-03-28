@@ -169,7 +169,14 @@ Then use `POST /api/v1/clusters` with a `ClusterSpec` that includes the platform
   "ip_range": "<start-ip>-<end-ip>",
   "dimensions": {
     "control_plane_count": 1,
-    "worker_count": 2
+    "worker_count": 2,
+    "cpu_per_node": 4,
+    "memory_gb_per_node": 16,
+    "boot_volume_gb": 50
+  },
+  "storage": {
+    "enabled": true,
+    "size": 50
   }
 }
 ```
