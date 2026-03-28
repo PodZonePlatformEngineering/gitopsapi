@@ -69,22 +69,85 @@ namespace — runs the kubectl command above and retrieves the generated passwor
 **Trust anchor:** possession of k8s namespace access is the proof of ownership.
 No out-of-band credential is required.
 
-### Phase 3 — Operator Provides Git Repository
+### Phase 3 — Operator Configures Management Cluster
 
-Via the API or GUI, the operator:
+**Two mutually exclusive modes.** The operator chooses based on whether a CAPI
+management cluster already exists.
 
-1. POSTs a git repository URL and access credentials (PAT or deploy key with
-   `contents: write` + `administration: write` scope for branch protection).
-2. Optionally provides a `self_cluster` block:
-   ```yaml
-   name: management
-   tunnel_id: <cloudflare-tunnel-uuid>
-   ingress_connector:
-     enabled: true
-     namespace: cloudflared
-   ```
-   This self-registers the host cluster in the gitopsapi registry, closing the
-   management-cluster gap (see analysis: CC-079 post-mortem).
+---
+
+#### Mode A — External management cluster (existing infrastructure)
+
+The operator provides:
+
+- Git repository URL + access credentials (PAT or deploy key, `contents: write` +
+  `administration: write` for branch protection)
+- Kubeconfig for the pre-existing CAPI management cluster
+- Optionally a `self_cluster` block to register the host cluster in the gitopsapi
+  registry (see Phase 4)
+
+```json
+POST /bootstrap/configure
+{
+  "mode": "external",
+  "infra_repo": {
+    "url": "https://github.com/org/management-infra",
+    "credentials_ref": "management-infra-deploy-key"
+  },
+  "management_kubeconfig": "<kubeconfig yaml>"
+}
+```
+
+---
+
+#### Mode B — Self-hosted management cluster (solves chicken-and-egg)
+
+The operator provides only:
+
+- Kubeconfig for the **host** cluster (the cluster gitopsapi is already running in)
+- Hypervisor credentials (Proxmox endpoint + API token)
+
+```json
+POST /bootstrap/configure
+{
+  "mode": "self-hosted",
+  "host_kubeconfig": "<kubeconfig yaml>",
+  "hypervisor": {
+    "name": "venus",
+    "type": "proxmox",
+    "endpoint": "https://proxmox.example.com:8006",
+    "credentials_ref": "capmox-credentials"
+  }
+}
+```
+
+gitopsapi then installs CAPI + CAPMOX into the host cluster:
+
+1. Writes CAPI + CAPMOX HelmReleases into the instance repo under
+   `gitops/gitops-<host-cluster>/01-infrastructure/capi/`
+   (Flux-managed, not imperatively applied — recoverable on restart)
+2. Creates the hypervisor credential K8s Secret from the provided credential set
+3. The host cluster IS now the management cluster — gitopsapi self-registers it
+4. Proceeds to Phase 4 (repo scaffold, SOPS keypair, branch protection)
+
+**No pre-existing infrastructure required.** gitopsapi can run on any k8s cluster
+(cloud, ETE cluster, a minimal single-node k3s) and provision workloads on a
+home-lab Proxmox reachable via Cloudflare tunnel.
+
+---
+
+#### Hypervisor reachability via Cloudflare tunnel
+
+In Mode B, the Proxmox API endpoint does not need a public IP. The gitopsapi
+instance configures a Cloudflare tunnel rule pointing at the Proxmox API host.
+CAPMOX calls the Proxmox API via the tunnel:
+
+```
+gitopsapi (any k8s) → CF tunnel → Proxmox API (home lab / remote site)
+```
+
+This closes the final topology gap: gitopsapi can be on a public cluster and
+provision clusters on a private hypervisor at any site.
 
 ### Phase 4 — gitopsapi Bootstraps the Repository
 
@@ -375,6 +438,17 @@ or after re-bootstrap), it:
 
 ## Open Items (Further Specification Needed)
 
+- [ ] **Self-hosted Mode B — CAPI installation detail**: which CAPI providers are
+      supported at launch (CAPMOX only)? Which Helm chart versions? Does gitopsapi
+      pin versions or track latest?
+- [ ] **Self-hosted Mode B — Proxmox via Cloudflare tunnel**: does gitopsapi configure
+      the CF tunnel rule for the Proxmox endpoint automatically, or is that a manual
+      prerequisite? If automatic, requires CF API token in Phase 3 payload.
+- [ ] **Mode selection persistence**: once Mode A or Mode B is chosen at bootstrap,
+      can it be changed without full re-bootstrap? (Probably not — treat as Cat 4.)
+- [ ] **`POST /bootstrap/configure` authorization**: only the bootstrap admin (first-boot
+      token) may call this. Subsequent calls should require cluster_operator role + MFA
+      equivalent (2-approver PR?).
 - [ ] Notification mechanism detail (K8s Event schema, optional webhook)
 - [ ] Actor re-encryption UX — does gitopsapi provide a guided flow (list of files
       needing re-encryption, per actor)?
