@@ -74,17 +74,17 @@ def test_render_values_platform_included():
     assert "proxmox" in out
 
 
-def test_render_values_external_hosts_included():
-    spec = _SPEC.model_copy(update={"external_hosts": ["git.podzone.cloud", "login.podzone.cloud"]})
+def test_render_values_hostname_included():
+    spec = _SPEC.model_copy(update={"hostname": ["git.podzone.cloud", "login.podzone.cloud"]})
     out = _render_values(spec)
-    assert "external_hosts" in out
+    assert "hostname" in out
     assert "git.podzone.cloud" in out
     assert "login.podzone.cloud" in out
 
 
-def test_render_values_external_hosts_omitted_when_empty():
+def test_render_values_hostname_omitted_when_empty():
     out = _render_values(_SPEC)
-    assert "external_hosts" not in out
+    assert "hostname" not in out
 
 
 def test_render_values_platform_omitted_when_none():
@@ -846,73 +846,100 @@ def test_storage_omitted_when_none():
     assert "storage:" not in out
 
 
-def test_storage_disabled_rendered():
-    """storage.enabled=False renders storage block with enabled: false."""
+def test_storage_linstor_disabled_rendered():
+    """storage.internal_linstor=False renders storage block."""
     from gitopsgui.models.cluster import StorageSpec
-    spec = _SPEC.model_copy(update={"storage": StorageSpec(enabled=False)})
+    spec = _SPEC.model_copy(update={"storage": StorageSpec(internal_linstor=False)})
     out = _render_values(spec)
     assert "storage:" in out
-    assert "enabled: false" in out
+    assert "internal_linstor: false" in out
 
 
-def test_storage_enabled_with_size_rendered():
-    """storage.enabled=True with size renders full storage block."""
+def test_storage_linstor_with_disk_rendered():
+    """storage.internal_linstor=True with linstor_disk_gb renders full storage block."""
     from gitopsgui.models.cluster import StorageSpec
-    spec = _SPEC.model_copy(update={"storage": StorageSpec(enabled=True, size=50)})
+    spec = _SPEC.model_copy(update={"storage": StorageSpec(internal_linstor=True, linstor_disk_gb=50)})
     out = _render_values(spec)
     assert "storage:" in out
-    assert "enabled: true" in out
-    assert "size: 50" in out
+    assert "internal_linstor: true" in out
+    assert "linstor_disk_gb: 50" in out
 
 
-def test_storage_size_omitted_when_none():
-    """When storage.size is None, storage block has no size key."""
+def test_storage_linstor_disk_omitted_when_none():
+    """When storage.linstor_disk_gb is None, storage block has no linstor_disk_gb key."""
     import yaml
     from gitopsgui.models.cluster import StorageSpec
-    spec = _SPEC.model_copy(update={"storage": StorageSpec(enabled=False)})
+    spec = _SPEC.model_copy(update={"storage": StorageSpec(internal_linstor=False)})
     parsed = yaml.safe_load(_render_values(spec))
-    assert "size" not in parsed.get("storage", {})
+    assert "linstor_disk_gb" not in parsed.get("storage", {})
 
 
-def test_classify_storage_enabled_change_is_cat1():
-    """Changing storage.enabled is Cat 1 (machine template change)."""
+def test_storage_emptydir_adds_to_boot_volume():
+    """emptydir_gb is added to worker boot_volume_size in rendered values."""
+    import yaml
+    from gitopsgui.models.cluster import StorageSpec
+    spec = _SPEC.model_copy(update={"storage": StorageSpec(emptydir_gb=30)})
+    parsed = yaml.safe_load(_render_values(spec))
+    assert parsed["worker"]["boot_volume_size"] == spec.dimensions.boot_volume_gb + 30
+
+
+def test_classify_storage_linstor_change_is_cat1():
+    """Changing storage.internal_linstor is Cat 1 (machine template change)."""
     from gitopsgui.models.cluster import StorageSpec
     existing = _SPEC_BASE
-    new = _SPEC_BASE.model_copy(update={"storage": StorageSpec(enabled=False)})
+    new = _SPEC_BASE.model_copy(update={"storage": StorageSpec(internal_linstor=True)})
     result = classify_cluster_changes(existing, new)
     assert result.category == ChangeCategory.IMMUTABLE_TEMPLATE
-    assert "storage.enabled" in result.changed_fields
+    assert "storage.internal_linstor" in result.changed_fields
 
 
-def test_classify_storage_size_change_is_cat1():
-    """Changing storage.size is Cat 1 (machine template change)."""
+def test_classify_storage_linstor_disk_change_is_cat1():
+    """Changing storage.linstor_disk_gb is Cat 1 (machine template change)."""
     from gitopsgui.models.cluster import StorageSpec
-    existing = _SPEC_BASE.model_copy(update={"storage": StorageSpec(enabled=True, size=20)})
-    new = _SPEC_BASE.model_copy(update={"storage": StorageSpec(enabled=True, size=50)})
+    existing = _SPEC_BASE.model_copy(update={"storage": StorageSpec(internal_linstor=True, linstor_disk_gb=20)})
+    new = _SPEC_BASE.model_copy(update={"storage": StorageSpec(internal_linstor=True, linstor_disk_gb=50)})
     result = classify_cluster_changes(existing, new)
     assert result.category == ChangeCategory.IMMUTABLE_TEMPLATE
-    assert "storage.size" in result.changed_fields
+    assert "storage.linstor_disk_gb" in result.changed_fields
+
+
+def test_classify_storage_emptydir_change_is_cat1():
+    """Changing storage.emptydir_gb is Cat 1 (boot disk resize)."""
+    from gitopsgui.models.cluster import StorageSpec
+    existing = _SPEC_BASE.model_copy(update={"storage": StorageSpec(emptydir_gb=0)})
+    new = _SPEC_BASE.model_copy(update={"storage": StorageSpec(emptydir_gb=30)})
+    result = classify_cluster_changes(existing, new)
+    assert result.category == ChangeCategory.IMMUTABLE_TEMPLATE
+    assert "storage.emptydir_gb" in result.changed_fields
 
 
 def test_classify_storage_unchanged_is_cat2():
     """Same storage spec is Cat 2 (no template change)."""
     from gitopsgui.models.cluster import StorageSpec
-    existing = _SPEC_BASE.model_copy(update={"storage": StorageSpec(enabled=True, size=20)})
-    new = _SPEC_BASE.model_copy(update={"storage": StorageSpec(enabled=True, size=20)})
+    existing = _SPEC_BASE.model_copy(update={"storage": StorageSpec(internal_linstor=True, linstor_disk_gb=20)})
+    new = _SPEC_BASE.model_copy(update={"storage": StorageSpec(internal_linstor=True, linstor_disk_gb=20)})
     result = classify_cluster_changes(existing, new)
     assert result.category == ChangeCategory.MUTABLE
 
 
-def test_dims_hash_differs_for_storage_enabled_vs_disabled():
-    """_dims_hash produces different values when storage.enabled changes."""
+def test_dims_hash_differs_for_storage_changes():
+    """_dims_hash produces different values when storage fields change."""
     from gitopsgui.models.cluster import StorageSpec
-    spec_with = _SPEC.model_copy(update={"storage": StorageSpec(enabled=True, size=20)})
-    spec_without = _SPEC.model_copy(update={"storage": StorageSpec(enabled=False)})
+    spec_with = _SPEC.model_copy(update={"storage": StorageSpec(internal_linstor=True, linstor_disk_gb=20)})
+    spec_without = _SPEC.model_copy(update={"storage": StorageSpec(internal_linstor=False)})
+    assert _dims_hash(spec_with) != _dims_hash(spec_without)
+
+
+def test_dims_hash_differs_for_emptydir():
+    """_dims_hash produces different values when emptydir_gb changes."""
+    from gitopsgui.models.cluster import StorageSpec
+    spec_with = _SPEC.model_copy(update={"storage": StorageSpec(emptydir_gb=30)})
+    spec_without = _SPEC.model_copy(update={"storage": StorageSpec(emptydir_gb=0)})
     assert _dims_hash(spec_with) != _dims_hash(spec_without)
 
 
 def test_musings_cluster_storage_disabled():
-    """musings test cluster: single node, storage disabled, no size rendered."""
+    """musings test cluster: single node, no linstor, no emptydir headroom."""
     from gitopsgui.models.cluster import StorageSpec
     musings = ClusterSpec(
         name="musings",
@@ -923,10 +950,10 @@ def test_musings_cluster_storage_disabled():
             cpu_per_node=2, memory_gb_per_node=4, boot_volume_gb=10,
         ),
         allow_scheduling_on_control_planes=True,
-        storage=StorageSpec(enabled=False),
+        storage=StorageSpec(internal_linstor=False),
         sops_secret_ref="sops-age",
     )
     import yaml
     parsed = yaml.safe_load(_render_values(musings))
-    assert parsed["storage"]["enabled"] is False
-    assert "size" not in parsed["storage"]
+    assert parsed["storage"]["internal_linstor"] is False
+    assert "linstor_disk_gb" not in parsed["storage"]

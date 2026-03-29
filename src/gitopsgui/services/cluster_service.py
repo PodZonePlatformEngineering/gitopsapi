@@ -24,7 +24,7 @@ from ..models.cluster import (
     ClusterSpec, ClusterResponse, ClusterStatus,
     ClusterSuspendResponse, ClusterDecommissionResponse,
     IngressConnectorSpec, IngressConnectorResponse,
-    PlatformSpec,
+    PlatformSpec, StorageSpec,
 )
 from ..models.deploy_key import ClusterBootstrapRequest, ClusterBootstrapResponse
 from .git_service import GitService
@@ -82,7 +82,7 @@ def _dims_hash(spec: "ClusterSpec") -> str:
     payload = {
         "worker_cpu": spec.dimensions.cpu_per_node,
         "worker_mem": spec.dimensions.memory_gb_per_node,
-        "worker_disk": spec.dimensions.boot_volume_gb,
+        "worker_disk": spec.dimensions.boot_volume_gb + (spec.storage.emptydir_gb if spec.storage else 0),
         "cp_cpu": cp_dims.cpu_per_node,
         "cp_mem": cp_dims.memory_gb_per_node,
         "cp_disk": cp_dims.boot_volume_gb,
@@ -90,8 +90,9 @@ def _dims_hash(spec: "ClusterSpec") -> str:
         "talos_node": (
             spec.platform.talos_template.node or (spec.platform.nodes[0] if spec.platform else None)
         ) if spec.platform else None,
-        "storage_enabled": spec.storage.enabled if spec.storage else True,
-        "storage_size": spec.storage.size if spec.storage else None,
+        "internal_linstor": spec.storage.internal_linstor if spec.storage else False,
+        "linstor_disk_gb": spec.storage.linstor_disk_gb if spec.storage else None,
+        "emptydir_gb": spec.storage.emptydir_gb if spec.storage else 0,
     }
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     return digest[:8]
@@ -144,27 +145,30 @@ def classify_cluster_changes(existing: "ClusterSpec", new: "ClusterSpec") -> Cha
             immutable_changes.append("platform.talos_template.node")
 
     # Cat 1: storage spec changes require new machine template (disk config changes)
-    old_storage = existing.storage
-    new_storage = new.storage
-    old_enabled = old_storage.enabled if old_storage else True
-    new_enabled = new_storage.enabled if new_storage else True
-    old_size = old_storage.size if old_storage else None
-    new_size = new_storage.size if new_storage else None
-    if old_enabled != new_enabled:
-        immutable_changes.append("storage.enabled")
-    if old_size != new_size:
-        immutable_changes.append("storage.size")
+    old_s = existing.storage
+    new_s = new.storage
+    if (old_s.internal_linstor if old_s else False) != (new_s.internal_linstor if new_s else False):
+        immutable_changes.append("storage.internal_linstor")
+    if (old_s.linstor_disk_gb if old_s else None) != (new_s.linstor_disk_gb if new_s else None):
+        immutable_changes.append("storage.linstor_disk_gb")
+    if (old_s.emptydir_gb if old_s else 0) != (new_s.emptydir_gb if new_s else 0):
+        immutable_changes.append("storage.emptydir_gb")
 
     if immutable_changes:
         changed.extend(immutable_changes)
         category = ChangeCategory.IMMUTABLE_TEMPLATE
 
-    # Cat 3: rolling update fields
+    # Cat 3: rolling update fields (node-by-node OS/extension update)
     rolling_changes = []
     if existing.kubernetes_version != new.kubernetes_version:
         rolling_changes.append("kubernetes_version")
     if existing.talos_image != new.talos_image:
         rolling_changes.append("talos_image")
+    # iSCSI capability toggle requires iscsi-tools Talos extension (rolling node update)
+    old_iscsi = existing.platform.capabilities.iscsi if existing.platform else False
+    new_iscsi = new.platform.capabilities.iscsi if new.platform else False
+    if old_iscsi != new_iscsi:
+        rolling_changes.append("platform.capabilities.iscsi")
     if rolling_changes:
         changed.extend(rolling_changes)
         if category == ChangeCategory.MUTABLE:
@@ -253,7 +257,7 @@ def _render_values(spec: ClusterSpec, machine_template_hash: Optional[str] = Non
             "num_cores": spec.dimensions.cpu_per_node,
             "num_sockets": 1,
             "memory_mib": spec.dimensions.memory_gb_per_node * 1024,
-            "boot_volume_size": spec.dimensions.boot_volume_gb,
+            "boot_volume_size": spec.dimensions.boot_volume_gb + (spec.storage.emptydir_gb if spec.storage else 0),
         },
     }
     if spec.extra_manifests:
@@ -264,6 +268,10 @@ def _render_values(spec: ClusterSpec, machine_template_hash: Optional[str] = Non
         data["cluster"]["kubernetes_version"] = spec.kubernetes_version
     if spec.talos_image:
         data["cluster"]["image"] = spec.talos_image
+    if spec.hostname:
+        data["cluster"]["hostname"] = spec.hostname
+    if spec.internal_hosts:
+        data["cluster"]["internalhost"] = spec.internal_hosts
     if machine_template_hash:
         data["controlplane"]["machine_template_suffix"] = f"controlplane-{machine_template_hash}"
         data["worker"]["machine_template_suffix"] = f"worker-{machine_template_hash}"
@@ -295,18 +303,24 @@ def _render_values(spec: ClusterSpec, machine_template_hash: Optional[str] = Non
             },
             "credentials_ref": spec.platform.credentials_ref,
             "bridge": spec.platform.bridge,
+            "capabilities": {
+                "nfs": spec.platform.capabilities.nfs,
+                "iscsi": spec.platform.capabilities.iscsi,
+                "s3": spec.platform.capabilities.s3,
+            },
         }
     data["vip"] = spec.vip
     if spec.gitops_repo_url:
         data["gitops_repo_url"] = spec.gitops_repo_url
     data["sops_secret_ref"] = spec.sops_secret_ref
     data["allow_scheduling_on_control_planes"] = spec.allow_scheduling_on_control_planes
-    if spec.external_hosts:
-        data["external_hosts"] = spec.external_hosts
     if spec.storage is not None:
-        storage_data: dict = {"enabled": spec.storage.enabled}
-        if spec.storage.size is not None:
-            storage_data["size"] = spec.storage.size
+        storage_data: dict = {
+            "internal_linstor": spec.storage.internal_linstor,
+            "emptydir_gb": spec.storage.emptydir_gb,
+        }
+        if spec.storage.linstor_disk_gb is not None:
+            storage_data["linstor_disk_gb"] = spec.storage.linstor_disk_gb
         data["storage"] = storage_data
 
     if spec.ingress_connector:
@@ -513,6 +527,9 @@ class ClusterService:
         raw_ic = data.get("ingress_connector")
         ingress_connector = IngressConnectorSpec(**raw_ic) if isinstance(raw_ic, dict) else None
 
+        raw_storage = data.get("storage")
+        storage = StorageSpec(**raw_storage) if isinstance(raw_storage, dict) else None
+
         spec = ClusterSpec(
             name=name,
             platform=platform,
@@ -522,8 +539,10 @@ class ClusterService:
             gitops_repo_url=data.get("gitops_repo_url", ""),
             sops_secret_ref=data.get("sops_secret_ref", ""),
             allow_scheduling_on_control_planes=data.get("allow_scheduling_on_control_planes", False),
-            external_hosts=data.get("external_hosts", []),
+            hostname=data.get("hostname", data.get("external_hosts", [])),
+            internal_hosts=data.get("internal_hosts", []),
             ingress_connector=ingress_connector,
+            storage=storage,
         )
         return ClusterResponse(name=name, spec=spec)
 
