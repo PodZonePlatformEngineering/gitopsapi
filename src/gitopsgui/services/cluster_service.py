@@ -20,13 +20,12 @@ from typing import List, Optional
 
 import yaml
 
-CLUSTER_CHART_REPO_URL = os.environ.get("GITOPS_CLUSTER_CHART_REPO_URL", "")
-
 from ..models.cluster import (
     ClusterSpec, ClusterResponse, ClusterStatus,
     ClusterSuspendResponse, ClusterDecommissionResponse,
     IngressConnectorSpec, IngressConnectorResponse,
-    PlatformSpec,
+    StorageClassesResponse, GatewayWireResponse,
+    PlatformSpec, StorageSpec,
 )
 from ..models.deploy_key import ClusterBootstrapRequest, ClusterBootstrapResponse
 from .git_service import GitService
@@ -34,6 +33,8 @@ from .github_service import GitHubService
 from . import repo_router
 
 CLUSTER_CHART_REPO_URL = os.environ.get("GITOPS_CLUSTER_CHART_REPO_URL", "")
+CLUSTER_CHART_REPO_NAME = os.environ.get("GITOPS_CLUSTER_CHART_REPO_NAME", "cluster-charts")
+CLUSTER_CHART_VERSION = os.environ.get("GITOPS_CLUSTER_CHART_VERSION", "0.1.20")
 
 _CLUSTER_CHARTS_BASE = "gitops/cluster-charts"
 _CLUSTERS_BASE = "clusters"
@@ -82,7 +83,7 @@ def _dims_hash(spec: "ClusterSpec") -> str:
     payload = {
         "worker_cpu": spec.dimensions.cpu_per_node,
         "worker_mem": spec.dimensions.memory_gb_per_node,
-        "worker_disk": spec.dimensions.boot_volume_gb,
+        "worker_disk": spec.dimensions.boot_volume_gb + (spec.storage.emptydir_gb if spec.storage else 0),
         "cp_cpu": cp_dims.cpu_per_node,
         "cp_mem": cp_dims.memory_gb_per_node,
         "cp_disk": cp_dims.boot_volume_gb,
@@ -90,8 +91,9 @@ def _dims_hash(spec: "ClusterSpec") -> str:
         "talos_node": (
             spec.platform.talos_template.node or (spec.platform.nodes[0] if spec.platform else None)
         ) if spec.platform else None,
-        "storage_enabled": spec.storage.enabled if spec.storage else True,
-        "storage_size": spec.storage.size if spec.storage else None,
+        "internal_linstor": spec.storage.internal_linstor if spec.storage else False,
+        "linstor_disk_gb": spec.storage.linstor_disk_gb if spec.storage else None,
+        "emptydir_gb": spec.storage.emptydir_gb if spec.storage else 0,
     }
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     return digest[:8]
@@ -144,27 +146,30 @@ def classify_cluster_changes(existing: "ClusterSpec", new: "ClusterSpec") -> Cha
             immutable_changes.append("platform.talos_template.node")
 
     # Cat 1: storage spec changes require new machine template (disk config changes)
-    old_storage = existing.storage
-    new_storage = new.storage
-    old_enabled = old_storage.enabled if old_storage else True
-    new_enabled = new_storage.enabled if new_storage else True
-    old_size = old_storage.size if old_storage else None
-    new_size = new_storage.size if new_storage else None
-    if old_enabled != new_enabled:
-        immutable_changes.append("storage.enabled")
-    if old_size != new_size:
-        immutable_changes.append("storage.size")
+    old_s = existing.storage
+    new_s = new.storage
+    if (old_s.internal_linstor if old_s else False) != (new_s.internal_linstor if new_s else False):
+        immutable_changes.append("storage.internal_linstor")
+    if (old_s.linstor_disk_gb if old_s else None) != (new_s.linstor_disk_gb if new_s else None):
+        immutable_changes.append("storage.linstor_disk_gb")
+    if (old_s.emptydir_gb if old_s else 0) != (new_s.emptydir_gb if new_s else 0):
+        immutable_changes.append("storage.emptydir_gb")
 
     if immutable_changes:
         changed.extend(immutable_changes)
         category = ChangeCategory.IMMUTABLE_TEMPLATE
 
-    # Cat 3: rolling update fields
+    # Cat 3: rolling update fields (node-by-node OS/extension update)
     rolling_changes = []
     if existing.kubernetes_version != new.kubernetes_version:
         rolling_changes.append("kubernetes_version")
     if existing.talos_image != new.talos_image:
         rolling_changes.append("talos_image")
+    # iSCSI capability toggle requires iscsi-tools Talos extension (rolling node update)
+    old_iscsi = existing.platform.capabilities.iscsi if existing.platform else False
+    new_iscsi = new.platform.capabilities.iscsi if new.platform else False
+    if old_iscsi != new_iscsi:
+        rolling_changes.append("platform.capabilities.iscsi")
     if rolling_changes:
         changed.extend(rolling_changes)
         if category == ChangeCategory.MUTABLE:
@@ -253,7 +258,7 @@ def _render_values(spec: ClusterSpec, machine_template_hash: Optional[str] = Non
             "num_cores": spec.dimensions.cpu_per_node,
             "num_sockets": 1,
             "memory_mib": spec.dimensions.memory_gb_per_node * 1024,
-            "boot_volume_size": spec.dimensions.boot_volume_gb,
+            "boot_volume_size": spec.dimensions.boot_volume_gb + (spec.storage.emptydir_gb if spec.storage else 0),
         },
     }
     if spec.extra_manifests:
@@ -264,6 +269,10 @@ def _render_values(spec: ClusterSpec, machine_template_hash: Optional[str] = Non
         data["cluster"]["kubernetes_version"] = spec.kubernetes_version
     if spec.talos_image:
         data["cluster"]["image"] = spec.talos_image
+    if spec.hostname:
+        data["cluster"]["hostname"] = spec.hostname
+    if spec.internal_hosts:
+        data["cluster"]["internalhost"] = spec.internal_hosts
     if machine_template_hash:
         data["controlplane"]["machine_template_suffix"] = f"controlplane-{machine_template_hash}"
         data["worker"]["machine_template_suffix"] = f"worker-{machine_template_hash}"
@@ -295,18 +304,27 @@ def _render_values(spec: ClusterSpec, machine_template_hash: Optional[str] = Non
             },
             "credentials_ref": spec.platform.credentials_ref,
             "bridge": spec.platform.bridge,
+            "capabilities": {
+                "nfs": spec.platform.capabilities.nfs,
+                "nfs_server": spec.platform.capabilities.nfs_server,
+                "iscsi": spec.platform.capabilities.iscsi,
+                "iscsi_server": spec.platform.capabilities.iscsi_server,
+                "s3": spec.platform.capabilities.s3,
+                "s3_endpoint": spec.platform.capabilities.s3_endpoint,
+            },
         }
     data["vip"] = spec.vip
     if spec.gitops_repo_url:
         data["gitops_repo_url"] = spec.gitops_repo_url
     data["sops_secret_ref"] = spec.sops_secret_ref
     data["allow_scheduling_on_control_planes"] = spec.allow_scheduling_on_control_planes
-    if spec.external_hosts:
-        data["external_hosts"] = spec.external_hosts
     if spec.storage is not None:
-        storage_data: dict = {"enabled": spec.storage.enabled}
-        if spec.storage.size is not None:
-            storage_data["size"] = spec.storage.size
+        storage_data: dict = {
+            "internal_linstor": spec.storage.internal_linstor,
+            "emptydir_gb": spec.storage.emptydir_gb,
+        }
+        if spec.storage.linstor_disk_gb is not None:
+            storage_data["linstor_disk_gb"] = spec.storage.linstor_disk_gb
         data["storage"] = storage_data
 
     if spec.ingress_connector:
@@ -354,7 +372,7 @@ def _render_cluster_yaml(name: str) -> str:
         apiVersion: source.toolkit.fluxcd.io/v1beta2
         kind: HelmRepository
         metadata:
-          name: podzone-charts
+          name: {CLUSTER_CHART_REPO_NAME}
           namespace: flux-system
         spec:
           interval: 10m0s
@@ -372,8 +390,8 @@ def _render_cluster_yaml(name: str) -> str:
               chart: cluster-chart
               sourceRef:
                 kind: HelmRepository
-                name: podzone-charts
-              version: 0.1.20
+                name: {CLUSTER_CHART_REPO_NAME}
+              version: {CLUSTER_CHART_VERSION}
           valuesFrom:
             - kind: ConfigMap
               name: {name}-values
@@ -486,6 +504,348 @@ def _render_cloudflared_flux_kustomization(cluster_name: str) -> str:
     """)
 
 
+# ---------------------------------------------------------------------------
+# Storage classes — democratic-csi NFS / iSCSI
+# ---------------------------------------------------------------------------
+
+_DEMOCRATIC_CSI_CHART_URL = "https://democratic-csi.github.io/charts/"
+_STORAGE_CLASSES_INFRA_PATH = "gitops/gitops-infra/storage-classes"
+
+
+def _render_democratic_csi_nfs_yaml(server: str) -> str:
+    """HelmRepository + HelmRelease for democratic-csi NFS StorageClass.
+
+    Requires a pre-existing Secret `democratic-csi-ssh` in namespace `democratic-csi`
+    containing the SSH private key for ZFS host access.
+    """
+    return textwrap.dedent(f"""\
+        ---
+        apiVersion: source.toolkit.fluxcd.io/v1beta2
+        kind: HelmRepository
+        metadata:
+          name: democratic-csi
+          namespace: flux-system
+        spec:
+          interval: 1h
+          url: {_DEMOCRATIC_CSI_CHART_URL}
+        ---
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: democratic-csi
+        ---
+        apiVersion: helm.toolkit.fluxcd.io/v2beta2
+        kind: HelmRelease
+        metadata:
+          name: democratic-csi-nfs
+          namespace: flux-system
+        spec:
+          targetNamespace: democratic-csi
+          interval: 1h
+          chart:
+            spec:
+              chart: democratic-csi
+              sourceRef:
+                kind: HelmRepository
+                name: democratic-csi
+              version: ">=0.14.0"
+          values:
+            csiDriver:
+              name: org.democratic-csi.nfs-saturn
+            driver:
+              config:
+                driver: zfs-generic-nfs
+                sshConnection:
+                  host: {server}
+                  port: 22
+                  username: root
+                  privateKeySecret:
+                    name: democratic-csi-ssh
+                    namespace: democratic-csi
+                zfs:
+                  datasetParentName: pool1/nfs
+                  detachedSnapshotsDatasetParentName: pool1/nfs-snapshots
+                  datasetEnableQuotas: true
+                  datasetEnableReservation: false
+                  datasetPermissionsMode: "0777"
+                  datasetPermissionsUser: 0
+                  datasetPermissionsGroup: 0
+                nfs:
+                  shareHost: {server}
+                  shareAlldirs: false
+                  shareAllowedHosts: []
+                  shareMaprootUser: root
+                  shareMaprootGroup: wheel
+                  shareMapallUser: ""
+                  shareMapallGroup: ""
+            storageClasses:
+              - name: nfs-saturn
+                defaultClass: false
+                reclaimPolicy: Delete
+                volumeBindingMode: Immediate
+                allowVolumeExpansion: true
+                parameters:
+                  fsType: nfs
+                mountOptions:
+                  - noatime
+                  - nfsvers=4
+            volumeSnapshotClasses:
+              - name: nfs-saturn
+                deletionPolicy: Delete
+    """)
+
+
+def _render_democratic_csi_iscsi_yaml(server: str) -> str:
+    """HelmRepository + HelmRelease for democratic-csi iSCSI StorageClass.
+
+    Requires:
+    - Pre-existing Secret `democratic-csi-ssh` in namespace `democratic-csi`
+    - Talos iscsi-tools machine extension enabled on worker nodes (Cat 3 change)
+    """
+    return textwrap.dedent(f"""\
+        ---
+        apiVersion: source.toolkit.fluxcd.io/v1beta2
+        kind: HelmRepository
+        metadata:
+          name: democratic-csi
+          namespace: flux-system
+        spec:
+          interval: 1h
+          url: {_DEMOCRATIC_CSI_CHART_URL}
+        ---
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: democratic-csi
+        ---
+        apiVersion: helm.toolkit.fluxcd.io/v2beta2
+        kind: HelmRelease
+        metadata:
+          name: democratic-csi-iscsi
+          namespace: flux-system
+        spec:
+          targetNamespace: democratic-csi
+          interval: 1h
+          chart:
+            spec:
+              chart: democratic-csi
+              sourceRef:
+                kind: HelmRepository
+                name: democratic-csi
+              version: ">=0.14.0"
+          values:
+            csiDriver:
+              name: org.democratic-csi.iscsi-saturn
+            driver:
+              config:
+                driver: zfs-generic-iscsi
+                sshConnection:
+                  host: {server}
+                  port: 22
+                  username: root
+                  privateKeySecret:
+                    name: democratic-csi-ssh
+                    namespace: democratic-csi
+                zfs:
+                  datasetParentName: pool1/iscsi
+                  detachedSnapshotsDatasetParentName: pool1/iscsi-snapshots
+                  datasetEnableQuotas: true
+                  datasetEnableReservation: false
+                  datasetPermissionsMode: "0770"
+                iscsi:
+                  targetPortal: "{server}:3260"
+                  namePrefix: iqn.2026-03.cloud.podzone:saturn-
+                  nameSuffix: ""
+                  targetGroups:
+                    - targetGroupPortalGroup: 1
+                      targetGroupInitiatorGroup: 1
+                      targetGroupAuthType: None
+                  extentInsecureTpc: true
+                  extentDisablePhysicalBlocksize: true
+                  extentBlocksize: 512
+            storageClasses:
+              - name: iscsi-saturn
+                defaultClass: false
+                reclaimPolicy: Retain
+                volumeBindingMode: Immediate
+                allowVolumeExpansion: true
+                parameters:
+                  fsType: ext4
+            volumeSnapshotClasses:
+              - name: iscsi-saturn
+                deletionPolicy: Retain
+    """)
+
+
+def _render_storage_classes_kustomization(backends: List[str]) -> str:
+    """kustomization.yaml listing the active storage class manifests."""
+    resources = "\n".join(f"  - democratic-csi-{b}.yaml" for b in backends)
+    return textwrap.dedent(f"""\
+        apiVersion: kustomize.config.k8s.io/v1beta1
+        kind: Kustomization
+        resources:
+        {resources}
+    """)
+
+
+def _render_storage_classes_flux_kustomization(cluster_name: str) -> str:
+    """Flux Kustomization entry to append to {cluster}-infra/clusters/{name}/infrastructure.yaml."""
+    return textwrap.dedent(f"""\
+        ---
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        metadata:
+          name: storage-classes
+          namespace: flux-system
+        spec:
+          interval: 1h
+          retryInterval: 1m
+          timeout: 10m
+          sourceRef:
+            kind: GitRepository
+            name: flux-system
+          path: ./{_STORAGE_CLASSES_INFRA_PATH}
+          prune: true
+          dependsOn:
+            - name: 00-prerequisites
+    """)
+
+
+# ---------------------------------------------------------------------------
+# Gateway — GatewayClass, Gateway listeners, ClusterIssuer, Certificate
+# ---------------------------------------------------------------------------
+
+_GATEWAY_INFRA_PATH = "gitops/gitops-infra/gateway"
+_INTERNAL_WILDCARD_DOMAIN = "*.internal.podzone.net"
+_LETSENCRYPT_EMAIL = "martinjcolley@gmail.com"
+
+
+def _listener_name(hostname: str, suffix: str) -> str:
+    """Sanitise a hostname into a valid Gateway listener name."""
+    return hostname.replace(".", "-").replace("_", "-") + "-" + suffix
+
+
+def _render_gateway_yaml(public_hosts: List[str], internal_hosts: List[str]) -> str:
+    """GatewayClass + Gateway listeners + optional ClusterIssuer + Certificate."""
+    lines = [textwrap.dedent("""\
+        ---
+        apiVersion: gateway.networking.k8s.io/v1beta1
+        kind: GatewayClass
+        metadata:
+          name: cilium
+        spec:
+          controllerName: io.cilium/gateway-controller
+        ---
+        apiVersion: gateway.networking.k8s.io/v1
+        kind: Gateway
+        metadata:
+          name: gateway
+          namespace: kube-system
+        spec:
+          gatewayClassName: cilium
+          listeners:
+    """)]
+
+    for h in public_hosts:
+        lines.append(textwrap.dedent(f"""\
+            \
+          - hostname: {h}
+            name: {_listener_name(h, "http")}
+            port: 80
+            protocol: HTTP
+            allowedRoutes:
+              namespaces:
+                from: All
+        """))
+
+    for h in internal_hosts:
+        lines.append(textwrap.dedent(f"""\
+            \
+          - hostname: {h}
+            name: {_listener_name(h, "https")}
+            port: 443
+            protocol: HTTPS
+            tls:
+              mode: Terminate
+              certificateRefs:
+                - name: internal-wildcard-tls
+                  namespace: kube-system
+            allowedRoutes:
+              namespaces:
+                from: All
+        """))
+
+    if internal_hosts:
+        lines.append(textwrap.dedent(f"""\
+            ---
+            # DNS-01 ClusterIssuer — issues wildcard cert for {_INTERNAL_WILDCARD_DOMAIN}
+            # Individual service names not exposed in Cloudflare DNS.
+            apiVersion: cert-manager.io/v1
+            kind: ClusterIssuer
+            metadata:
+              name: lets-encrypt-dns01
+            spec:
+              acme:
+                email: {_LETSENCRYPT_EMAIL}
+                server: https://acme-v02.api.letsencrypt.org/directory
+                privateKeySecretRef:
+                  name: letsencrypt-dns01-key
+                solvers:
+                - dns01:
+                    cloudflare:
+                      apiTokenSecretRef:
+                        name: cloudflare-api-token
+                        key: api-token
+            ---
+            apiVersion: cert-manager.io/v1
+            kind: Certificate
+            metadata:
+              name: internal-wildcard-tls
+              namespace: kube-system
+            spec:
+              secretName: internal-wildcard-tls
+              issuerRef:
+                name: lets-encrypt-dns01
+                kind: ClusterIssuer
+              dnsNames:
+                - "{_INTERNAL_WILDCARD_DOMAIN}"
+        """))
+
+    return "\n".join(lines)
+
+
+def _render_gateway_kustomization() -> str:
+    return textwrap.dedent("""\
+        apiVersion: kustomize.config.k8s.io/v1beta1
+        kind: Kustomization
+        resources:
+          - gateway.yaml
+    """)
+
+
+def _render_gateway_flux_kustomization(cluster_name: str) -> str:
+    """Flux Kustomization entry to append to {cluster}-infra/clusters/{name}/infrastructure.yaml."""
+    return textwrap.dedent(f"""\
+        ---
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        metadata:
+          name: gateway
+          namespace: flux-system
+        spec:
+          interval: 1h
+          retryInterval: 1m
+          timeout: 5m
+          sourceRef:
+            kind: GitRepository
+            name: flux-system
+          path: ./{_GATEWAY_INFRA_PATH}
+          prune: true
+          dependsOn:
+            - name: 00-manifests
+    """)
+
+
 class ClusterService:
     def __init__(self):
         self._git = GitService()
@@ -513,6 +873,9 @@ class ClusterService:
         raw_ic = data.get("ingress_connector")
         ingress_connector = IngressConnectorSpec(**raw_ic) if isinstance(raw_ic, dict) else None
 
+        raw_storage = data.get("storage")
+        storage = StorageSpec(**raw_storage) if isinstance(raw_storage, dict) else None
+
         spec = ClusterSpec(
             name=name,
             platform=platform,
@@ -522,8 +885,10 @@ class ClusterService:
             gitops_repo_url=data.get("gitops_repo_url", ""),
             sops_secret_ref=data.get("sops_secret_ref", ""),
             allow_scheduling_on_control_planes=data.get("allow_scheduling_on_control_planes", False),
-            external_hosts=data.get("external_hosts", []),
+            hostname=data.get("hostname", data.get("external_hosts", [])),
+            internal_hosts=data.get("internal_hosts", []),
             ingress_connector=ingress_connector,
+            storage=storage,
         )
         return ClusterResponse(name=name, spec=spec)
 
@@ -809,6 +1174,172 @@ class ClusterService:
             name=cluster_name,
             apps_pr_url=apps_pr_url,
             infra_pr_url=infra_pr_url,
+        )
+
+    async def wire_storage_classes(self, cluster_name: str) -> StorageClassesResponse:
+        """Render democratic-csi HelmRelease manifests into {cluster}-infra based on platform.capabilities.
+
+        Writes to {cluster}-infra:
+        - gitops/gitops-infra/storage-classes/democratic-csi-{backend}.yaml per enabled backend
+        - gitops/gitops-infra/storage-classes/kustomization.yaml
+        - Appends storage-classes Flux Kustomization to clusters/{name}/infrastructure.yaml
+
+        Raises ValueError if the cluster has no storage-capable backends configured.
+        """
+        cluster = await self.get_cluster(cluster_name)
+        if not cluster:
+            raise FileNotFoundError(f"Cluster {cluster_name!r} not found")
+
+        caps = cluster.spec.platform.capabilities if cluster.spec.platform else None
+        backends: List[str] = []
+        if caps and caps.nfs:
+            if not caps.nfs_server:
+                raise ValueError("platform.capabilities.nfs_server is required when nfs=True")
+            backends.append("nfs")
+        if caps and caps.iscsi:
+            if not caps.iscsi_server:
+                raise ValueError("platform.capabilities.iscsi_server is required when iscsi=True")
+            backends.append("iscsi")
+
+        if not backends:
+            raise ValueError(
+                f"Cluster {cluster_name!r} has no NFS or iSCSI capabilities configured. "
+                "Set platform.capabilities.nfs=true or iscsi=true with the corresponding server address."
+            )
+
+        branch = f"cluster/storage-classes-{cluster_name}-{uuid.uuid4().hex[:8]}"
+        git_infra = repo_router.git_for_infra(cluster_name)
+        gh_infra = repo_router.github_for_infra(cluster_name)
+
+        await git_infra.create_branch(branch)
+
+        if caps.nfs:
+            await git_infra.write_file(
+                f"{_STORAGE_CLASSES_INFRA_PATH}/democratic-csi-nfs.yaml",
+                _render_democratic_csi_nfs_yaml(caps.nfs_server),
+            )
+        if caps.iscsi:
+            await git_infra.write_file(
+                f"{_STORAGE_CLASSES_INFRA_PATH}/democratic-csi-iscsi.yaml",
+                _render_democratic_csi_iscsi_yaml(caps.iscsi_server),
+            )
+        await git_infra.write_file(
+            f"{_STORAGE_CLASSES_INFRA_PATH}/kustomization.yaml",
+            _render_storage_classes_kustomization(backends),
+        )
+
+        infra_yaml_path = f"clusters/{cluster_name}/infrastructure.yaml"
+        existing = await git_infra.read_file(infra_yaml_path)
+        updated = existing.rstrip("\n") + "\n" + _render_storage_classes_flux_kustomization(cluster_name)
+        await git_infra.write_file(infra_yaml_path, updated)
+
+        await git_infra.commit(f"feat: add storage-classes manifests for {cluster_name}")
+        await git_infra.push()
+
+        infra_pr_url = await gh_infra.create_pr(
+            branch=branch,
+            title=f"feat: wire storage-classes — {cluster_name}",
+            body=(
+                f"Adds democratic-csi StorageClass deployment to `{cluster_name}-infra`.\n\n"
+                f"**Backends**: {', '.join(backends)}\n\n"
+                + (
+                    f"**NFS server**: `{caps.nfs_server}`\n"
+                    if caps.nfs else ""
+                )
+                + (
+                    f"**iSCSI server**: `{caps.iscsi_server}`\n\n"
+                    f"⚠️ iSCSI requires the `iscsi-tools` Talos machine extension (Cat 3 — "
+                    f"rolling node update). Ensure the extension is in the cluster's Talos image "
+                    f"before merging.\n\n"
+                    if caps.iscsi else "\n"
+                )
+                + f"**Prerequisite**: Secret `democratic-csi-ssh` must exist in namespace "
+                f"`democratic-csi` with the SSH private key for ZFS host access."
+            ),
+            labels=["cluster", _CLUSTER_STAGE_LABEL],
+            reviewers=_CLUSTER_REVIEWERS,
+        )
+
+        return StorageClassesResponse(
+            name=cluster_name,
+            infra_pr_url=infra_pr_url,
+            backends=backends,
+        )
+
+    async def wire_gateway(self, cluster_name: str) -> "GatewayWireResponse":
+        """Render Gateway manifests into {cluster}-infra based on ClusterSpec.hostname and .internal_hosts.
+
+        Writes to {cluster}-infra:
+        - gitops/gitops-infra/gateway/gateway.yaml  (GatewayClass, Gateway, optional ClusterIssuer + Certificate)
+        - gitops/gitops-infra/gateway/kustomization.yaml
+        - Appends gateway Flux Kustomization to clusters/{name}/infrastructure.yaml
+
+        Raises ValueError if neither hostname nor internal_hosts is configured.
+        """
+        from ..models.cluster import GatewayWireResponse
+
+        cluster = await self.get_cluster(cluster_name)
+        if not cluster:
+            raise FileNotFoundError(f"Cluster {cluster_name!r} not found")
+
+        public_hosts = cluster.spec.hostname
+        int_hosts = cluster.spec.internal_hosts
+
+        if not public_hosts and not int_hosts:
+            raise ValueError(
+                f"Cluster {cluster_name!r} has no hostname or internal_hosts configured. "
+                "Set at least one in the cluster spec before wiring the gateway."
+            )
+
+        branch = f"cluster/gateway-{cluster_name}-{uuid.uuid4().hex[:8]}"
+        git_infra = repo_router.git_for_infra(cluster_name)
+        gh_infra = repo_router.github_for_infra(cluster_name)
+
+        await git_infra.create_branch(branch)
+        await git_infra.write_file(
+            f"{_GATEWAY_INFRA_PATH}/gateway.yaml",
+            _render_gateway_yaml(public_hosts, int_hosts),
+        )
+        await git_infra.write_file(
+            f"{_GATEWAY_INFRA_PATH}/kustomization.yaml",
+            _render_gateway_kustomization(),
+        )
+
+        infra_yaml_path = f"clusters/{cluster_name}/infrastructure.yaml"
+        existing = await git_infra.read_file(infra_yaml_path)
+        updated = existing.rstrip("\n") + "\n" + _render_gateway_flux_kustomization(cluster_name)
+        await git_infra.write_file(infra_yaml_path, updated)
+
+        await git_infra.commit(f"feat: add gateway manifests for {cluster_name}")
+        await git_infra.push()
+
+        pr_body = (
+            f"Adds Gateway manifests to `{cluster_name}-infra`.\n\n"
+        )
+        if public_hosts:
+            pr_body += f"**Public (HTTP-80)**: {', '.join(f'`{h}`' for h in public_hosts)}\n\n"
+        if int_hosts:
+            pr_body += (
+                f"**Internal (HTTPS-443)**: {', '.join(f'`{h}`' for h in int_hosts)}\n\n"
+                f"Includes `lets-encrypt-dns01` ClusterIssuer and wildcard Certificate "
+                f"for `{_INTERNAL_WILDCARD_DOMAIN}`.\n\n"
+                f"**Prerequisites**: `cloudflare-api-token` Secret in `cert-manager` namespace "
+                f"(deployed via `00-prerequisites` Kustomization).\n\n"
+            )
+
+        infra_pr_url = await gh_infra.create_pr(
+            branch=branch,
+            title=f"feat: wire gateway — {cluster_name}",
+            body=pr_body,
+            labels=["cluster", _CLUSTER_STAGE_LABEL],
+            reviewers=_CLUSTER_REVIEWERS,
+        )
+
+        return GatewayWireResponse(
+            name=cluster_name,
+            infra_pr_url=infra_pr_url,
+            public_hosts=public_hosts,
+            internal_hosts=int_hosts,
         )
 
     async def bootstrap_cluster(

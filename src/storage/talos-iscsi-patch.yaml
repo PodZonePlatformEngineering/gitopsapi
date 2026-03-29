@@ -1,0 +1,20 @@
+# Talos machine config patch — enable iSCSI initiator
+# Apply to nodes in clusters that will use the iscsi-saturn storageClass
+#
+# Usage (patch all nodes in a cluster):
+#   talosctl patch mc --patch @talos-iscsi-patch.yaml --nodes <node-ip> --endpoints <cp-ip>
+#
+# Requires node reboot. Verify after reboot:
+#   talosctl get extensions --nodes <node-ip>
+#
+# Check current siderolabs/iscsi-tools versions at:
+#   https://github.com/siderolabs/extensions/pkgs/container/iscsi-tools
+
+machine:
+  kernel:
+    modules:
+      - name: iscsi_tcp
+
+  install:
+    extensions:
+      - image: ghcr.io/siderolabs/iscsi-tools:v0.1.6   # pin to a specific version

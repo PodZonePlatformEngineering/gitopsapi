@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from typing import List
 
-from ...models.cluster import ClusterSpec, ClusterResponse, ClusterSuspendResponse, ClusterDecommissionResponse, IngressConnectorResponse
+from ...models.cluster import ClusterSpec, ClusterResponse, ClusterSuspendResponse, ClusterDecommissionResponse, IngressConnectorResponse, StorageClassesResponse, GatewayWireResponse
 from ...models.deploy_key import ClusterBootstrapRequest, ClusterBootstrapResponse
 from ...models.sops import SOPSBootstrapRequest, SOPSBootstrapResponse
 from ...services.cluster_service import ClusterService
@@ -148,6 +148,54 @@ async def wire_ingress_connector(
     svc = ClusterService()
     try:
         return await svc.wire_ingress_connector(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post(
+    "/clusters/{name}/storage-classes",
+    response_model=StorageClassesResponse,
+    status_code=201,
+    summary="Wire democratic-csi StorageClass manifests into {name}-infra",
+)
+async def wire_storage_classes(
+    name: str,
+    _=require_role("cluster_operator"),
+):
+    """Renders democratic-csi HelmRelease manifests into {name}-infra based on platform.capabilities.
+
+    Requires platform.capabilities.nfs=true (with nfs_server) and/or iscsi=true (with iscsi_server).
+    Opens one PR to {name}-infra. Merge after the democratic-csi-ssh Secret is in place.
+    """
+    svc = ClusterService()
+    try:
+        return await svc.wire_storage_classes(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post(
+    "/clusters/{name}/gateway",
+    response_model=GatewayWireResponse,
+    status_code=201,
+    summary="Wire Gateway manifests into {name}-infra from ClusterSpec.hostname and .internal_hosts",
+)
+async def wire_gateway(
+    name: str,
+    _=require_role("cluster_operator"),
+):
+    """Renders GatewayClass, Gateway listeners, and optional DNS-01 ClusterIssuer + Certificate
+    into {name}-infra based on the cluster's hostname[] and internal_hosts[] fields.
+
+    Opens one PR to {name}-infra. Replaces manually-maintained shared-infra gateway files.
+    """
+    svc = ClusterService()
+    try:
+        return await svc.wire_gateway(name)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

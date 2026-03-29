@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import List, Optional
 
 
@@ -19,8 +19,27 @@ class IngressConnectorSpec(BaseModel):
 
 
 class StorageSpec(BaseModel):
-    enabled: bool = True          # when False, Linstor/piraeus storage class provisioning is skipped
-    size: Optional[int] = None   # dedicated storage disk size in GB (Linstor data pool); None = no storage disk
+    internal_linstor: bool = False
+    # Deploy Piraeus/Linstor on this cluster. Cat 1 change (machine template suffix).
+
+    linstor_disk_gb: Optional[int] = None
+    # Additional VM data disk for Linstor pool (GB). None = no dedicated data disk. Cat 1 change.
+
+    emptydir_gb: int = 0
+    # emptyDir headroom added to provisioned boot disk size. Cat 1 change.
+    # Use when apps require large ephemeral local storage (e.g. ollama model cache).
+    # Provisioned boot disk = dimensions.boot_volume_gb + emptydir_gb.
+
+    @model_validator(mode='before')
+    @classmethod
+    def _migrate_legacy_fields(cls, values):
+        """Migrate pre-redesign fields: enabled → internal_linstor, size → linstor_disk_gb."""
+        if isinstance(values, dict):
+            if 'enabled' in values and 'internal_linstor' not in values:
+                values['internal_linstor'] = values.pop('enabled')
+            if 'size' in values and 'linstor_disk_gb' not in values:
+                values['linstor_disk_gb'] = values.pop('size')
+        return values
 
 
 class ClusterDimensions(BaseModel):
@@ -44,6 +63,26 @@ class TalosTemplateSpec(BaseModel):
     node: Optional[str] = None     # Proxmox node where template resides; defaults to platform.nodes[0]
 
 
+class PlatformCapabilities(BaseModel):
+    nfs: bool = False
+    # NFS target reachable from this cluster's network.
+    # Enables democratic-csi NFS StorageClass deployment. Cat 2 change.
+    nfs_server: Optional[str] = None
+    # IP or hostname of the NFS/ZFS server (required when nfs=True).
+
+    iscsi: bool = False
+    # iSCSI target reachable from this cluster's network.
+    # Enables democratic-csi iSCSI StorageClass + Talos iscsi-tools extension. Cat 3 change.
+    iscsi_server: Optional[str] = None
+    # IP or hostname of the iSCSI/ZFS server (required when iscsi=True).
+
+    s3: bool = False
+    # S3-compatible store reachable (MinIO or external).
+    # Enables S3 bucket provisioner StorageClass deployment. Cat 2 change.
+    s3_endpoint: Optional[str] = None
+    # S3 endpoint URL (required when s3=True).
+
+
 class PlatformSpec(BaseModel):
     name: str                # human identifier for the hypervisor (e.g. "venus", "saturn")
     type: str = "proxmox"   # provisioning platform type; only "proxmox" supported
@@ -52,6 +91,7 @@ class PlatformSpec(BaseModel):
     talos_template: TalosTemplateSpec = Field(default_factory=TalosTemplateSpec)
     credentials_ref: str = "capmox-manager-credentials"  # K8s secret name with CAPMOX API credentials
     bridge: str = "vmbr0"               # Proxmox VM network bridge
+    capabilities: PlatformCapabilities = Field(default_factory=PlatformCapabilities)
 
 
 class ClusterSpec(BaseModel):
@@ -69,9 +109,14 @@ class ClusterSpec(BaseModel):
     extra_manifests: List[str] = []  # URLs applied as Talos extra_manifests (cilium, flux, gateway-api, etc.)
     bastion: Optional[BastionSpec] = None  # if set, kubeconfig server URL is rewritten to bastion
     allow_scheduling_on_control_planes: bool = False  # enables Talos allowSchedulingOnControlPlanes; required when worker_count=0
-    external_hosts: List[str] = []  # FQDNs served externally via this cluster's Gateway; drives cert-manager certs + Gateway listeners at provisioning time
+    hostname: List[str] = []
+    # Public-facing FQDNs — Cloudflare-proxied, HTTP-80 Gateway listeners.
+    # Previously named external_hosts (migrated transparently on read).
+    internal_hosts: List[str] = []
+    # Internal-only FQDNs — HTTPS-443 listeners, DNS-01 wildcard TLS (*.internal.podzone.net).
+    # DNS resolution via pfSense Unbound Host Overrides (internal clients only).
     ingress_connector: Optional[IngressConnectorSpec] = None  # CC-068: cloudflared tunnel connector config
-    storage: Optional[StorageSpec] = None  # T-025: storage class config; None = default (enabled, no dedicated disk)
+    storage: Optional[StorageSpec] = None  # storage class config; None = default (no linstor, no emptydir headroom)
 
 
 class ClusterSuspendResponse(BaseModel):
@@ -89,6 +134,19 @@ class IngressConnectorResponse(BaseModel):
     name: str
     apps_pr_url: str
     infra_pr_url: str
+
+
+class StorageClassesResponse(BaseModel):
+    name: str
+    infra_pr_url: str
+    backends: List[str]  # e.g. ["nfs", "iscsi"]
+
+
+class GatewayWireResponse(BaseModel):
+    name: str
+    infra_pr_url: str
+    public_hosts: List[str]   # HTTP-80 listeners generated
+    internal_hosts: List[str] # HTTPS-443 listeners generated; wildcard cert if non-empty
 
 
 class ClusterStatus(BaseModel):
