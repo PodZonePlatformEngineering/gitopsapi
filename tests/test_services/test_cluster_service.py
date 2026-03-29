@@ -573,6 +573,139 @@ async def test_wire_ingress_connector_opens_two_prs():
 
 
 # ---------------------------------------------------------------------------
+# ClusterService.wire_storage_classes
+# ---------------------------------------------------------------------------
+
+def _storage_raw_yaml(caps: dict) -> str:
+    import yaml as _yaml
+    return _yaml.dump({
+        "cluster": {"name": "test-cluster"},
+        "network": {"ip_ranges": ["10.0.0.0/24"]},
+        "vip": "10.0.0.1",
+        "sops_secret_ref": "sops-key",
+        "dimensions": {"control_plane_count": 1, "worker_count": 2,
+                       "cpu_per_node": 4, "memory_gb_per_node": 8, "boot_volume_gb": 50},
+        "platform": {
+            "name": "venus", "type": "proxmox", "endpoint": "https://192.168.4.50:8006",
+            "nodes": ["venus"], "credentials_ref": "capmox",
+            "bridge": "vmbr0", "capabilities": caps,
+        },
+    })
+
+
+async def test_wire_storage_classes_raises_if_cluster_not_found():
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.read_file = AsyncMock(side_effect=FileNotFoundError("not found"))
+    import pytest
+    with pytest.raises(FileNotFoundError):
+        await svc.wire_storage_classes("missing")
+
+
+async def test_wire_storage_classes_raises_if_no_backends():
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.read_file = AsyncMock(return_value=_storage_raw_yaml(
+        {"nfs": False, "iscsi": False, "s3": False}
+    ))
+    import pytest
+    with pytest.raises(ValueError, match="no NFS or iSCSI"):
+        await svc.wire_storage_classes("test-cluster")
+
+
+async def test_wire_storage_classes_raises_if_nfs_server_missing():
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.read_file = AsyncMock(return_value=_storage_raw_yaml(
+        {"nfs": True, "nfs_server": None, "iscsi": False}
+    ))
+    import pytest
+    with pytest.raises(ValueError, match="nfs_server is required"):
+        await svc.wire_storage_classes("test-cluster")
+
+
+async def test_wire_storage_classes_nfs_opens_infra_pr():
+    from unittest.mock import patch, AsyncMock as AM
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.read_file = AsyncMock(return_value=_storage_raw_yaml(
+        {"nfs": True, "nfs_server": "192.168.4.51", "iscsi": False}
+    ))
+    mock_git_infra = AsyncMock()
+    mock_git_infra.read_file = AsyncMock(return_value="existing: infra\n")
+    mock_gh_infra = AsyncMock()
+    mock_gh_infra.create_pr = AsyncMock(return_value="https://github.com/test/infra/pull/5")
+
+    with (
+        patch("gitopsgui.services.cluster_service.repo_router.git_for_infra", return_value=mock_git_infra),
+        patch("gitopsgui.services.cluster_service.repo_router.github_for_infra", return_value=mock_gh_infra),
+    ):
+        result = await svc.wire_storage_classes("test-cluster")
+
+    assert result.infra_pr_url == "https://github.com/test/infra/pull/5"
+    assert result.backends == ["nfs"]
+    assert result.name == "test-cluster"
+    # nfs manifest + kustomization.yaml + infrastructure.yaml append = 3 writes
+    assert mock_git_infra.write_file.call_count == 3
+
+
+async def test_wire_storage_classes_iscsi_and_nfs_writes_both_manifests():
+    from unittest.mock import patch, AsyncMock as AM
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.read_file = AsyncMock(return_value=_storage_raw_yaml({
+        "nfs": True, "nfs_server": "192.168.4.51",
+        "iscsi": True, "iscsi_server": "192.168.4.51",
+    }))
+    mock_git_infra = AsyncMock()
+    mock_git_infra.read_file = AsyncMock(return_value="existing: infra\n")
+    mock_gh_infra = AsyncMock()
+    mock_gh_infra.create_pr = AsyncMock(return_value="https://github.com/test/infra/pull/6")
+
+    with (
+        patch("gitopsgui.services.cluster_service.repo_router.git_for_infra", return_value=mock_git_infra),
+        patch("gitopsgui.services.cluster_service.repo_router.github_for_infra", return_value=mock_gh_infra),
+    ):
+        result = await svc.wire_storage_classes("test-cluster")
+
+    assert set(result.backends) == {"nfs", "iscsi"}
+    # nfs manifest + iscsi manifest + kustomization.yaml + infrastructure.yaml = 4 writes
+    assert mock_git_infra.write_file.call_count == 4
+
+
+def test_render_democratic_csi_nfs_yaml_contains_server():
+    from gitopsgui.services.cluster_service import _render_democratic_csi_nfs_yaml
+    out = _render_democratic_csi_nfs_yaml("192.168.4.51")
+    assert "192.168.4.51" in out
+    assert "nfs-saturn" in out
+    assert "zfs-generic-nfs" in out
+    assert "HelmRelease" in out
+
+
+def test_render_democratic_csi_iscsi_yaml_contains_server():
+    from gitopsgui.services.cluster_service import _render_democratic_csi_iscsi_yaml
+    out = _render_democratic_csi_iscsi_yaml("192.168.4.51")
+    assert "192.168.4.51" in out
+    assert "iscsi-saturn" in out
+    assert "zfs-generic-iscsi" in out
+    assert "HelmRelease" in out
+
+
+def test_render_storage_classes_kustomization_lists_backends():
+    from gitopsgui.services.cluster_service import _render_storage_classes_kustomization
+    out = _render_storage_classes_kustomization(["nfs", "iscsi"])
+    assert "democratic-csi-nfs.yaml" in out
+    assert "democratic-csi-iscsi.yaml" in out
+
+
+def test_render_storage_classes_flux_kustomization():
+    from gitopsgui.services.cluster_service import _render_storage_classes_flux_kustomization
+    out = _render_storage_classes_flux_kustomization("mycluster")
+    assert "name: storage-classes" in out
+    assert "00-prerequisites" in out
+
+
+# ---------------------------------------------------------------------------
 # ClusterService.bootstrap_cluster — CC-053b
 # ---------------------------------------------------------------------------
 

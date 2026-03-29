@@ -67,14 +67,20 @@ class PlatformCapabilities(BaseModel):
     nfs: bool = False
     # NFS target reachable from this cluster's network.
     # Enables democratic-csi NFS StorageClass deployment. Cat 2 change.
+    nfs_server: Optional[str] = None
+    # IP or hostname of the NFS/ZFS server (required when nfs=True).
 
     iscsi: bool = False
     # iSCSI target reachable from this cluster's network.
     # Enables democratic-csi iSCSI StorageClass + Talos iscsi-tools extension. Cat 3 change.
+    iscsi_server: Optional[str] = None
+    # IP or hostname of the iSCSI/ZFS server (required when iscsi=True).
 
     s3: bool = False
     # S3-compatible store reachable (MinIO or external).
     # Enables S3 bucket provisioner StorageClass deployment. Cat 2 change.
+    s3_endpoint: Optional[str] = None
+    # S3 endpoint URL (required when s3=True).
 
 
 class PlatformSpec(BaseModel):
@@ -128,6 +134,12 @@ class IngressConnectorResponse(BaseModel):
     name: str
     apps_pr_url: str
     infra_pr_url: str
+
+
+class StorageClassesResponse(BaseModel):
+    name: str
+    infra_pr_url: str
+    backends: List[str]  # e.g. ["nfs", "iscsi"]
 
 
 class ClusterStatus(BaseModel):

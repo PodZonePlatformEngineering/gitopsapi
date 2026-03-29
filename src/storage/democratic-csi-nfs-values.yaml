@@ -1,0 +1,54 @@
+# democratic-csi values — NFS backend (saturn)
+# Simpler than iSCSI; no Talos extension required; supports ReadWriteMany
+#
+# Usage:
+#   helm upgrade --install democratic-csi-nfs democratic-csi/democratic-csi \
+#     --namespace democratic-csi --create-namespace \
+#     -f democratic-csi-nfs-values.yaml
+
+csiDriver:
+  name: "org.democratic-csi.nfs-saturn"
+
+driver:
+  config:
+    driver: zfs-generic-nfs
+
+    sshConnection:
+      host: 192.168.4.51
+      port: 22
+      username: root
+      # privateKey via Secret (same as iSCSI — reuse if both deployed)
+
+    zfs:
+      datasetParentName: "pool1/nfs"
+      detachedSnapshotsDatasetParentName: "pool1/nfs-snapshots"
+      datasetEnableQuotas: true
+      datasetEnableReservation: false
+      datasetPermissionsMode: "0777"
+      datasetPermissionsUser: 0
+      datasetPermissionsGroup: 0
+
+    nfs:
+      shareHost: "192.168.4.51"   # update to vmbr3 IP once storage bridge is live
+      shareAlldirs: false
+      shareAllowedHosts: []        # empty = any host; restrict to cluster CIDRs in production
+      shareMaprootUser: root
+      shareMaprootGroup: wheel
+      shareMapallUser: ""
+      shareMapallGroup: ""
+
+storageClasses:
+  - name: nfs-saturn
+    defaultClass: false
+    reclaimPolicy: Delete
+    volumeBindingMode: Immediate
+    allowVolumeExpansion: true
+    parameters:
+      fsType: nfs
+    mountOptions:
+      - noatime
+      - nfsvers=4
+
+volumeSnapshotClasses:
+  - name: nfs-saturn
+    deletionPolicy: Delete

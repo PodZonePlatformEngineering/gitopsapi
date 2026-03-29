@@ -1,0 +1,21 @@
+proxmox_endpoint  = "https://192.168.4.51:8006"
+proxmox_username  = "root@pam"
+hypervisor_node   = "saturn"
+datastore_id      = "local"
+pool_datastore_id = "local"   # saturn: confirm pool name — may differ from venus
+
+default_gateway   = "192.168.4.1"
+management_bridge = "vmbr0"
+cluster_bridge    = "vmbr1"
+wan_bridge        = "vmbr2"
+storage_bridge    = "vmbr3"
+
+# saturn NIC assignments (confirmed via ip link show 2026-03-28)
+# Pre-apply: migrate vmbr0 from enp68s0f0 → eno1 in Proxmox UI (cable eno1 → LAN switch first)
+cluster_lan_nic   = "enp68s0f1"  # 10G SFP+, DAC to venus eno1
+wan_nic           = "eno1"        # 1G BaseT; cable to upstream switch; also used as new vmbr0 port after migration
+storage_nic       = "enp68s0f0"  # 10G SFP+, DAC to venus eno2 (free after vmbr0 migrated to eno1)
+
+management_cp_ip  = "192.168.4.151"   # ETE management cluster CP — block 15 (.150–.159)
+pfsense_lan_ip    = "10.2.0.1"        # pfSense LAN IP on vmbr1 — separate subnet from venus (10.1.0.0/24)
+pfsense_iso       = "local:iso/pfSense-CE-2.7.2-RELEASE-amd64.iso"

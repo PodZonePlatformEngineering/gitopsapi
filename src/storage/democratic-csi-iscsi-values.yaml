@@ -1,0 +1,60 @@
+# democratic-csi values — iSCSI backend (saturn LIO/targetcli)
+# Deploy per cluster that needs the iscsi-saturn storageClass
+#
+# Usage:
+#   helm repo add democratic-csi https://democratic-csi.github.io/charts/
+#   helm upgrade --install democratic-csi-iscsi democratic-csi/democratic-csi \
+#     --namespace democratic-csi --create-namespace \
+#     -f democratic-csi-iscsi-values.yaml
+
+csiDriver:
+  name: "org.democratic-csi.iscsi-saturn"
+
+driver:
+  config:
+    driver: zfs-generic-iscsi   # LIO/targetcli on Linux host (not TrueNAS)
+
+    sshConnection:
+      host: 192.168.4.51        # saturn Proxmox host IP (vmbr3/storage network preferred)
+      port: 22
+      username: root
+      # privateKey injected via Secret — do not store here
+      # kubectl create secret generic democratic-csi-ssh \
+      #   --from-file=privateKey=/path/to/key -n democratic-csi
+
+    zfs:
+      # Adjust to match saturn's actual ZFS pool/dataset (run: zpool list on saturn)
+      datasetParentName: "pool1/iscsi"
+      detachedSnapshotsDatasetParentName: "pool1/iscsi-snapshots"
+      datasetEnableQuotas: true
+      datasetEnableReservation: false
+      datasetPermissionsMode: "0770"
+
+    iscsi:
+      targetPortal: "192.168.4.51:3260"   # saturn storage IP — update to vmbr3 IP once bridge live
+      # targetPortalInterface: vmbr3        # bind to storage NIC when available
+      namePrefix: "iqn.2026-03.cloud.podzone:saturn-"
+      nameSuffix: ""
+      targetGroups:
+        - targetGroupPortalGroup: 1
+          targetGroupInitiatorGroup: 1
+          targetGroupAuthType: None       # set to CHAP in production
+      extentInsecureTpc: true
+      extentXenCompat: false
+      extentDisablePhysicalBlocksize: true
+      extentBlocksize: 512
+      extentRpm: 7200                     # adjust for SSD
+      extentAvailThreshold: 0
+
+storageClasses:
+  - name: iscsi-saturn
+    defaultClass: false
+    reclaimPolicy: Retain
+    volumeBindingMode: Immediate
+    allowVolumeExpansion: true
+    parameters:
+      fsType: ext4
+
+volumeSnapshotClasses:
+  - name: iscsi-saturn
+    deletionPolicy: Retain

@@ -24,6 +24,7 @@ from ..models.cluster import (
     ClusterSpec, ClusterResponse, ClusterStatus,
     ClusterSuspendResponse, ClusterDecommissionResponse,
     IngressConnectorSpec, IngressConnectorResponse,
+    StorageClassesResponse,
     PlatformSpec, StorageSpec,
 )
 from ..models.deploy_key import ClusterBootstrapRequest, ClusterBootstrapResponse
@@ -305,8 +306,11 @@ def _render_values(spec: ClusterSpec, machine_template_hash: Optional[str] = Non
             "bridge": spec.platform.bridge,
             "capabilities": {
                 "nfs": spec.platform.capabilities.nfs,
+                "nfs_server": spec.platform.capabilities.nfs_server,
                 "iscsi": spec.platform.capabilities.iscsi,
+                "iscsi_server": spec.platform.capabilities.iscsi_server,
                 "s3": spec.platform.capabilities.s3,
+                "s3_endpoint": spec.platform.capabilities.s3_endpoint,
             },
         }
     data["vip"] = spec.vip
@@ -497,6 +501,213 @@ def _render_cloudflared_flux_kustomization(cluster_name: str) -> str:
             provider: sops
             secretRef:
               name: sops-age
+    """)
+
+
+# ---------------------------------------------------------------------------
+# Storage classes — democratic-csi NFS / iSCSI
+# ---------------------------------------------------------------------------
+
+_DEMOCRATIC_CSI_CHART_URL = "https://democratic-csi.github.io/charts/"
+_STORAGE_CLASSES_INFRA_PATH = "gitops/gitops-infra/storage-classes"
+
+
+def _render_democratic_csi_nfs_yaml(server: str) -> str:
+    """HelmRepository + HelmRelease for democratic-csi NFS StorageClass.
+
+    Requires a pre-existing Secret `democratic-csi-ssh` in namespace `democratic-csi`
+    containing the SSH private key for ZFS host access.
+    """
+    return textwrap.dedent(f"""\
+        ---
+        apiVersion: source.toolkit.fluxcd.io/v1beta2
+        kind: HelmRepository
+        metadata:
+          name: democratic-csi
+          namespace: flux-system
+        spec:
+          interval: 1h
+          url: {_DEMOCRATIC_CSI_CHART_URL}
+        ---
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: democratic-csi
+        ---
+        apiVersion: helm.toolkit.fluxcd.io/v2beta2
+        kind: HelmRelease
+        metadata:
+          name: democratic-csi-nfs
+          namespace: flux-system
+        spec:
+          targetNamespace: democratic-csi
+          interval: 1h
+          chart:
+            spec:
+              chart: democratic-csi
+              sourceRef:
+                kind: HelmRepository
+                name: democratic-csi
+              version: ">=0.14.0"
+          values:
+            csiDriver:
+              name: org.democratic-csi.nfs-saturn
+            driver:
+              config:
+                driver: zfs-generic-nfs
+                sshConnection:
+                  host: {server}
+                  port: 22
+                  username: root
+                  privateKeySecret:
+                    name: democratic-csi-ssh
+                    namespace: democratic-csi
+                zfs:
+                  datasetParentName: pool1/nfs
+                  detachedSnapshotsDatasetParentName: pool1/nfs-snapshots
+                  datasetEnableQuotas: true
+                  datasetEnableReservation: false
+                  datasetPermissionsMode: "0777"
+                  datasetPermissionsUser: 0
+                  datasetPermissionsGroup: 0
+                nfs:
+                  shareHost: {server}
+                  shareAlldirs: false
+                  shareAllowedHosts: []
+                  shareMaprootUser: root
+                  shareMaprootGroup: wheel
+                  shareMapallUser: ""
+                  shareMapallGroup: ""
+            storageClasses:
+              - name: nfs-saturn
+                defaultClass: false
+                reclaimPolicy: Delete
+                volumeBindingMode: Immediate
+                allowVolumeExpansion: true
+                parameters:
+                  fsType: nfs
+                mountOptions:
+                  - noatime
+                  - nfsvers=4
+            volumeSnapshotClasses:
+              - name: nfs-saturn
+                deletionPolicy: Delete
+    """)
+
+
+def _render_democratic_csi_iscsi_yaml(server: str) -> str:
+    """HelmRepository + HelmRelease for democratic-csi iSCSI StorageClass.
+
+    Requires:
+    - Pre-existing Secret `democratic-csi-ssh` in namespace `democratic-csi`
+    - Talos iscsi-tools machine extension enabled on worker nodes (Cat 3 change)
+    """
+    return textwrap.dedent(f"""\
+        ---
+        apiVersion: source.toolkit.fluxcd.io/v1beta2
+        kind: HelmRepository
+        metadata:
+          name: democratic-csi
+          namespace: flux-system
+        spec:
+          interval: 1h
+          url: {_DEMOCRATIC_CSI_CHART_URL}
+        ---
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: democratic-csi
+        ---
+        apiVersion: helm.toolkit.fluxcd.io/v2beta2
+        kind: HelmRelease
+        metadata:
+          name: democratic-csi-iscsi
+          namespace: flux-system
+        spec:
+          targetNamespace: democratic-csi
+          interval: 1h
+          chart:
+            spec:
+              chart: democratic-csi
+              sourceRef:
+                kind: HelmRepository
+                name: democratic-csi
+              version: ">=0.14.0"
+          values:
+            csiDriver:
+              name: org.democratic-csi.iscsi-saturn
+            driver:
+              config:
+                driver: zfs-generic-iscsi
+                sshConnection:
+                  host: {server}
+                  port: 22
+                  username: root
+                  privateKeySecret:
+                    name: democratic-csi-ssh
+                    namespace: democratic-csi
+                zfs:
+                  datasetParentName: pool1/iscsi
+                  detachedSnapshotsDatasetParentName: pool1/iscsi-snapshots
+                  datasetEnableQuotas: true
+                  datasetEnableReservation: false
+                  datasetPermissionsMode: "0770"
+                iscsi:
+                  targetPortal: "{server}:3260"
+                  namePrefix: iqn.2026-03.cloud.podzone:saturn-
+                  nameSuffix: ""
+                  targetGroups:
+                    - targetGroupPortalGroup: 1
+                      targetGroupInitiatorGroup: 1
+                      targetGroupAuthType: None
+                  extentInsecureTpc: true
+                  extentDisablePhysicalBlocksize: true
+                  extentBlocksize: 512
+            storageClasses:
+              - name: iscsi-saturn
+                defaultClass: false
+                reclaimPolicy: Retain
+                volumeBindingMode: Immediate
+                allowVolumeExpansion: true
+                parameters:
+                  fsType: ext4
+            volumeSnapshotClasses:
+              - name: iscsi-saturn
+                deletionPolicy: Retain
+    """)
+
+
+def _render_storage_classes_kustomization(backends: List[str]) -> str:
+    """kustomization.yaml listing the active storage class manifests."""
+    resources = "\n".join(f"  - democratic-csi-{b}.yaml" for b in backends)
+    return textwrap.dedent(f"""\
+        apiVersion: kustomize.config.k8s.io/v1beta1
+        kind: Kustomization
+        resources:
+        {resources}
+    """)
+
+
+def _render_storage_classes_flux_kustomization(cluster_name: str) -> str:
+    """Flux Kustomization entry to append to {cluster}-infra/clusters/{name}/infrastructure.yaml."""
+    return textwrap.dedent(f"""\
+        ---
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        metadata:
+          name: storage-classes
+          namespace: flux-system
+        spec:
+          interval: 1h
+          retryInterval: 1m
+          timeout: 10m
+          sourceRef:
+            kind: GitRepository
+            name: flux-system
+          path: ./{_STORAGE_CLASSES_INFRA_PATH}
+          prune: true
+          dependsOn:
+            - name: 00-prerequisites
     """)
 
 
@@ -828,6 +1039,96 @@ class ClusterService:
             name=cluster_name,
             apps_pr_url=apps_pr_url,
             infra_pr_url=infra_pr_url,
+        )
+
+    async def wire_storage_classes(self, cluster_name: str) -> StorageClassesResponse:
+        """Render democratic-csi HelmRelease manifests into {cluster}-infra based on platform.capabilities.
+
+        Writes to {cluster}-infra:
+        - gitops/gitops-infra/storage-classes/democratic-csi-{backend}.yaml per enabled backend
+        - gitops/gitops-infra/storage-classes/kustomization.yaml
+        - Appends storage-classes Flux Kustomization to clusters/{name}/infrastructure.yaml
+
+        Raises ValueError if the cluster has no storage-capable backends configured.
+        """
+        cluster = await self.get_cluster(cluster_name)
+        if not cluster:
+            raise FileNotFoundError(f"Cluster {cluster_name!r} not found")
+
+        caps = cluster.spec.platform.capabilities if cluster.spec.platform else None
+        backends: List[str] = []
+        if caps and caps.nfs:
+            if not caps.nfs_server:
+                raise ValueError("platform.capabilities.nfs_server is required when nfs=True")
+            backends.append("nfs")
+        if caps and caps.iscsi:
+            if not caps.iscsi_server:
+                raise ValueError("platform.capabilities.iscsi_server is required when iscsi=True")
+            backends.append("iscsi")
+
+        if not backends:
+            raise ValueError(
+                f"Cluster {cluster_name!r} has no NFS or iSCSI capabilities configured. "
+                "Set platform.capabilities.nfs=true or iscsi=true with the corresponding server address."
+            )
+
+        branch = f"cluster/storage-classes-{cluster_name}-{uuid.uuid4().hex[:8]}"
+        git_infra = repo_router.git_for_infra(cluster_name)
+        gh_infra = repo_router.github_for_infra(cluster_name)
+
+        await git_infra.create_branch(branch)
+
+        if caps.nfs:
+            await git_infra.write_file(
+                f"{_STORAGE_CLASSES_INFRA_PATH}/democratic-csi-nfs.yaml",
+                _render_democratic_csi_nfs_yaml(caps.nfs_server),
+            )
+        if caps.iscsi:
+            await git_infra.write_file(
+                f"{_STORAGE_CLASSES_INFRA_PATH}/democratic-csi-iscsi.yaml",
+                _render_democratic_csi_iscsi_yaml(caps.iscsi_server),
+            )
+        await git_infra.write_file(
+            f"{_STORAGE_CLASSES_INFRA_PATH}/kustomization.yaml",
+            _render_storage_classes_kustomization(backends),
+        )
+
+        infra_yaml_path = f"clusters/{cluster_name}/infrastructure.yaml"
+        existing = await git_infra.read_file(infra_yaml_path)
+        updated = existing.rstrip("\n") + "\n" + _render_storage_classes_flux_kustomization(cluster_name)
+        await git_infra.write_file(infra_yaml_path, updated)
+
+        await git_infra.commit(f"feat: add storage-classes manifests for {cluster_name}")
+        await git_infra.push()
+
+        infra_pr_url = await gh_infra.create_pr(
+            branch=branch,
+            title=f"feat: wire storage-classes — {cluster_name}",
+            body=(
+                f"Adds democratic-csi StorageClass deployment to `{cluster_name}-infra`.\n\n"
+                f"**Backends**: {', '.join(backends)}\n\n"
+                + (
+                    f"**NFS server**: `{caps.nfs_server}`\n"
+                    if caps.nfs else ""
+                )
+                + (
+                    f"**iSCSI server**: `{caps.iscsi_server}`\n\n"
+                    f"⚠️ iSCSI requires the `iscsi-tools` Talos machine extension (Cat 3 — "
+                    f"rolling node update). Ensure the extension is in the cluster's Talos image "
+                    f"before merging.\n\n"
+                    if caps.iscsi else "\n"
+                )
+                + f"**Prerequisite**: Secret `democratic-csi-ssh` must exist in namespace "
+                f"`democratic-csi` with the SSH private key for ZFS host access."
+            ),
+            labels=["cluster", _CLUSTER_STAGE_LABEL],
+            reviewers=_CLUSTER_REVIEWERS,
+        )
+
+        return StorageClassesResponse(
+            name=cluster_name,
+            infra_pr_url=infra_pr_url,
+            backends=backends,
         )
 
     async def bootstrap_cluster(

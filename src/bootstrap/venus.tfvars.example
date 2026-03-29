@@ -1,0 +1,19 @@
+proxmox_endpoint  = "https://192.168.4.50:8006"
+proxmox_username  = "root@pam"
+hypervisor_node   = "venus"
+datastore_id      = "local"
+pool_datastore_id = "pool1"
+
+default_gateway   = "192.168.4.1"
+management_bridge = "vmbr0"
+cluster_bridge    = "vmbr1"
+wan_bridge        = "vmbr2"
+
+cluster_lan_nic   = "eno1"   # enp1s0f0 — 10G SFP+, DAC to saturn enp68s0f1
+wan_nic           = "eno4"   # enp1s0f3 — 1G BaseT; cable to upstream switch required before apply
+storage_nic       = "eno2"   # enp1s0f1 — 10G SFP+, DAC to saturn enp68s0f0 (after saturn vmbr0 migration)
+# eno3 — 1G BaseT, master of vmbr0 (Proxmox management, existing)
+
+management_cp_ip  = "192.168.4.211"
+pfsense_lan_ip    = "10.1.0.1"
+pfsense_iso       = "local:iso/pfSense-CE-2.7.2-RELEASE-amd64.iso"
