@@ -24,7 +24,7 @@ from ..models.cluster import (
     ClusterSpec, ClusterResponse, ClusterStatus,
     ClusterSuspendResponse, ClusterDecommissionResponse,
     IngressConnectorSpec, IngressConnectorResponse,
-    StorageClassesResponse,
+    StorageClassesResponse, GatewayWireResponse,
     PlatformSpec, StorageSpec,
 )
 from ..models.deploy_key import ClusterBootstrapRequest, ClusterBootstrapResponse
@@ -711,6 +711,141 @@ def _render_storage_classes_flux_kustomization(cluster_name: str) -> str:
     """)
 
 
+# ---------------------------------------------------------------------------
+# Gateway — GatewayClass, Gateway listeners, ClusterIssuer, Certificate
+# ---------------------------------------------------------------------------
+
+_GATEWAY_INFRA_PATH = "gitops/gitops-infra/gateway"
+_INTERNAL_WILDCARD_DOMAIN = "*.internal.podzone.net"
+_LETSENCRYPT_EMAIL = "martinjcolley@gmail.com"
+
+
+def _listener_name(hostname: str, suffix: str) -> str:
+    """Sanitise a hostname into a valid Gateway listener name."""
+    return hostname.replace(".", "-").replace("_", "-") + "-" + suffix
+
+
+def _render_gateway_yaml(public_hosts: List[str], internal_hosts: List[str]) -> str:
+    """GatewayClass + Gateway listeners + optional ClusterIssuer + Certificate."""
+    lines = [textwrap.dedent("""\
+        ---
+        apiVersion: gateway.networking.k8s.io/v1beta1
+        kind: GatewayClass
+        metadata:
+          name: cilium
+        spec:
+          controllerName: io.cilium/gateway-controller
+        ---
+        apiVersion: gateway.networking.k8s.io/v1
+        kind: Gateway
+        metadata:
+          name: gateway
+          namespace: kube-system
+        spec:
+          gatewayClassName: cilium
+          listeners:
+    """)]
+
+    for h in public_hosts:
+        lines.append(textwrap.dedent(f"""\
+            \
+          - hostname: {h}
+            name: {_listener_name(h, "http")}
+            port: 80
+            protocol: HTTP
+            allowedRoutes:
+              namespaces:
+                from: All
+        """))
+
+    for h in internal_hosts:
+        lines.append(textwrap.dedent(f"""\
+            \
+          - hostname: {h}
+            name: {_listener_name(h, "https")}
+            port: 443
+            protocol: HTTPS
+            tls:
+              mode: Terminate
+              certificateRefs:
+                - name: internal-wildcard-tls
+                  namespace: kube-system
+            allowedRoutes:
+              namespaces:
+                from: All
+        """))
+
+    if internal_hosts:
+        lines.append(textwrap.dedent(f"""\
+            ---
+            # DNS-01 ClusterIssuer — issues wildcard cert for {_INTERNAL_WILDCARD_DOMAIN}
+            # Individual service names not exposed in Cloudflare DNS.
+            apiVersion: cert-manager.io/v1
+            kind: ClusterIssuer
+            metadata:
+              name: lets-encrypt-dns01
+            spec:
+              acme:
+                email: {_LETSENCRYPT_EMAIL}
+                server: https://acme-v02.api.letsencrypt.org/directory
+                privateKeySecretRef:
+                  name: letsencrypt-dns01-key
+                solvers:
+                - dns01:
+                    cloudflare:
+                      apiTokenSecretRef:
+                        name: cloudflare-api-token
+                        key: api-token
+            ---
+            apiVersion: cert-manager.io/v1
+            kind: Certificate
+            metadata:
+              name: internal-wildcard-tls
+              namespace: kube-system
+            spec:
+              secretName: internal-wildcard-tls
+              issuerRef:
+                name: lets-encrypt-dns01
+                kind: ClusterIssuer
+              dnsNames:
+                - "{_INTERNAL_WILDCARD_DOMAIN}"
+        """))
+
+    return "\n".join(lines)
+
+
+def _render_gateway_kustomization() -> str:
+    return textwrap.dedent("""\
+        apiVersion: kustomize.config.k8s.io/v1beta1
+        kind: Kustomization
+        resources:
+          - gateway.yaml
+    """)
+
+
+def _render_gateway_flux_kustomization(cluster_name: str) -> str:
+    """Flux Kustomization entry to append to {cluster}-infra/clusters/{name}/infrastructure.yaml."""
+    return textwrap.dedent(f"""\
+        ---
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        metadata:
+          name: gateway
+          namespace: flux-system
+        spec:
+          interval: 1h
+          retryInterval: 1m
+          timeout: 5m
+          sourceRef:
+            kind: GitRepository
+            name: flux-system
+          path: ./{_GATEWAY_INFRA_PATH}
+          prune: true
+          dependsOn:
+            - name: 00-manifests
+    """)
+
+
 class ClusterService:
     def __init__(self):
         self._git = GitService()
@@ -1129,6 +1264,82 @@ class ClusterService:
             name=cluster_name,
             infra_pr_url=infra_pr_url,
             backends=backends,
+        )
+
+    async def wire_gateway(self, cluster_name: str) -> "GatewayWireResponse":
+        """Render Gateway manifests into {cluster}-infra based on ClusterSpec.hostname and .internal_hosts.
+
+        Writes to {cluster}-infra:
+        - gitops/gitops-infra/gateway/gateway.yaml  (GatewayClass, Gateway, optional ClusterIssuer + Certificate)
+        - gitops/gitops-infra/gateway/kustomization.yaml
+        - Appends gateway Flux Kustomization to clusters/{name}/infrastructure.yaml
+
+        Raises ValueError if neither hostname nor internal_hosts is configured.
+        """
+        from ..models.cluster import GatewayWireResponse
+
+        cluster = await self.get_cluster(cluster_name)
+        if not cluster:
+            raise FileNotFoundError(f"Cluster {cluster_name!r} not found")
+
+        public_hosts = cluster.spec.hostname
+        int_hosts = cluster.spec.internal_hosts
+
+        if not public_hosts and not int_hosts:
+            raise ValueError(
+                f"Cluster {cluster_name!r} has no hostname or internal_hosts configured. "
+                "Set at least one in the cluster spec before wiring the gateway."
+            )
+
+        branch = f"cluster/gateway-{cluster_name}-{uuid.uuid4().hex[:8]}"
+        git_infra = repo_router.git_for_infra(cluster_name)
+        gh_infra = repo_router.github_for_infra(cluster_name)
+
+        await git_infra.create_branch(branch)
+        await git_infra.write_file(
+            f"{_GATEWAY_INFRA_PATH}/gateway.yaml",
+            _render_gateway_yaml(public_hosts, int_hosts),
+        )
+        await git_infra.write_file(
+            f"{_GATEWAY_INFRA_PATH}/kustomization.yaml",
+            _render_gateway_kustomization(),
+        )
+
+        infra_yaml_path = f"clusters/{cluster_name}/infrastructure.yaml"
+        existing = await git_infra.read_file(infra_yaml_path)
+        updated = existing.rstrip("\n") + "\n" + _render_gateway_flux_kustomization(cluster_name)
+        await git_infra.write_file(infra_yaml_path, updated)
+
+        await git_infra.commit(f"feat: add gateway manifests for {cluster_name}")
+        await git_infra.push()
+
+        pr_body = (
+            f"Adds Gateway manifests to `{cluster_name}-infra`.\n\n"
+        )
+        if public_hosts:
+            pr_body += f"**Public (HTTP-80)**: {', '.join(f'`{h}`' for h in public_hosts)}\n\n"
+        if int_hosts:
+            pr_body += (
+                f"**Internal (HTTPS-443)**: {', '.join(f'`{h}`' for h in int_hosts)}\n\n"
+                f"Includes `lets-encrypt-dns01` ClusterIssuer and wildcard Certificate "
+                f"for `{_INTERNAL_WILDCARD_DOMAIN}`.\n\n"
+                f"**Prerequisites**: `cloudflare-api-token` Secret in `cert-manager` namespace "
+                f"(deployed via `00-prerequisites` Kustomization).\n\n"
+            )
+
+        infra_pr_url = await gh_infra.create_pr(
+            branch=branch,
+            title=f"feat: wire gateway — {cluster_name}",
+            body=pr_body,
+            labels=["cluster", _CLUSTER_STAGE_LABEL],
+            reviewers=_CLUSTER_REVIEWERS,
+        )
+
+        return GatewayWireResponse(
+            name=cluster_name,
+            infra_pr_url=infra_pr_url,
+            public_hosts=public_hosts,
+            internal_hosts=int_hosts,
         )
 
     async def bootstrap_cluster(

@@ -142,6 +142,13 @@ class StorageClassesResponse(BaseModel):
     backends: List[str]  # e.g. ["nfs", "iscsi"]
 
 
+class GatewayWireResponse(BaseModel):
+    name: str
+    infra_pr_url: str
+    public_hosts: List[str]   # HTTP-80 listeners generated
+    internal_hosts: List[str] # HTTPS-443 listeners generated; wildcard cert if non-empty
+
+
 class ClusterStatus(BaseModel):
     flux_status: Optional[str] = None
     k8s_version: Optional[str] = None

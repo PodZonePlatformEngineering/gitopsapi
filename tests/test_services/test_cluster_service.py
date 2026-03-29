@@ -970,6 +970,102 @@ async def test_update_cluster_cat3_warns_in_pr():
 
 
 # ---------------------------------------------------------------------------
+# ClusterService.wire_gateway
+# ---------------------------------------------------------------------------
+
+def _gateway_raw_yaml(hostname=None, internal_hosts=None):
+    import yaml as _yaml
+    return _yaml.dump({
+        "cluster": {"name": "test-cluster"},
+        "network": {"ip_ranges": ["10.0.0.0/24"]},
+        "vip": "10.0.0.1",
+        "sops_secret_ref": "sops-key",
+        "dimensions": {"control_plane_count": 1, "worker_count": 1,
+                       "cpu_per_node": 4, "memory_gb_per_node": 8, "boot_volume_gb": 50},
+        **({"hostname": hostname} if hostname else {}),
+        **({"internal_hosts": internal_hosts} if internal_hosts else {}),
+    })
+
+
+async def test_wire_gateway_raises_if_cluster_not_found():
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.read_file = AsyncMock(side_effect=FileNotFoundError("not found"))
+    import pytest
+    with pytest.raises(FileNotFoundError):
+        await svc.wire_gateway("missing")
+
+
+async def test_wire_gateway_raises_if_no_hosts():
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.read_file = AsyncMock(return_value=_gateway_raw_yaml())
+    import pytest
+    with pytest.raises(ValueError, match="no hostname or internal_hosts"):
+        await svc.wire_gateway("test-cluster")
+
+
+async def test_wire_gateway_public_only_opens_infra_pr():
+    from unittest.mock import patch
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.read_file = AsyncMock(return_value=_gateway_raw_yaml(
+        hostname=["ollama.podzone.cloud", "qdrant.podzone.cloud"]
+    ))
+    mock_git_infra = AsyncMock()
+    mock_git_infra.read_file = AsyncMock(return_value="existing: infra\n")
+    mock_gh_infra = AsyncMock()
+    mock_gh_infra.create_pr = AsyncMock(return_value="https://github.com/test/infra/pull/7")
+
+    with (
+        patch("gitopsgui.services.cluster_service.repo_router.git_for_infra", return_value=mock_git_infra),
+        patch("gitopsgui.services.cluster_service.repo_router.github_for_infra", return_value=mock_gh_infra),
+    ):
+        result = await svc.wire_gateway("test-cluster")
+
+    assert result.infra_pr_url == "https://github.com/test/infra/pull/7"
+    assert result.public_hosts == ["ollama.podzone.cloud", "qdrant.podzone.cloud"]
+    assert result.internal_hosts == []
+    # gateway.yaml + kustomization.yaml + infrastructure.yaml = 3 writes
+    assert mock_git_infra.write_file.call_count == 3
+
+
+async def test_wire_gateway_internal_hosts_writes_cert_resources():
+    from unittest.mock import patch
+    from gitopsgui.services.cluster_service import _render_gateway_yaml
+    out = _render_gateway_yaml([], ["storage.internal.podzone.net"])
+    assert "lets-encrypt-dns01" in out
+    assert "Certificate" in out
+    assert "*.internal.podzone.net" in out
+    assert "HTTPS" in out
+
+
+def test_render_gateway_yaml_http_listener():
+    from gitopsgui.services.cluster_service import _render_gateway_yaml
+    out = _render_gateway_yaml(["ollama.podzone.cloud"], [])
+    assert "ollama-podzone-cloud-http" in out
+    assert "port: 80" in out
+    assert "HTTP" in out
+    assert "ClusterIssuer" not in out
+    assert "Certificate" not in out
+
+
+def test_render_gateway_yaml_https_listener():
+    from gitopsgui.services.cluster_service import _render_gateway_yaml
+    out = _render_gateway_yaml([], ["storage.internal.podzone.net"])
+    assert "storage-internal-podzone-net-https" in out
+    assert "port: 443" in out
+    assert "internal-wildcard-tls" in out
+
+
+def test_render_gateway_flux_kustomization():
+    from gitopsgui.services.cluster_service import _render_gateway_flux_kustomization
+    out = _render_gateway_flux_kustomization("mycluster")
+    assert "name: gateway" in out
+    assert "00-manifests" in out
+
+
+# ---------------------------------------------------------------------------
 # StorageSpec model and rendering (T-025)
 # ---------------------------------------------------------------------------
 
