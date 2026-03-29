@@ -436,31 +436,206 @@ or after re-bootstrap), it:
 
 ---
 
-## Open Items (Further Specification Needed)
+## Phase 3 — Mode B Detail
 
-- [ ] **Self-hosted Mode B — CAPI installation detail**: which CAPI providers are
-      supported at launch (CAPMOX only)? Which Helm chart versions? Does gitopsapi
-      pin versions or track latest?
-- [ ] **Self-hosted Mode B — Proxmox via Cloudflare tunnel**: does gitopsapi configure
-      the CF tunnel rule for the Proxmox endpoint automatically, or is that a manual
-      prerequisite? If automatic, requires CF API token in Phase 3 payload.
-- [ ] **Mode selection persistence**: once Mode A or Mode B is chosen at bootstrap,
-      can it be changed without full re-bootstrap? (Probably not — treat as Cat 4.)
-- [ ] **`POST /bootstrap/configure` authorization**: only the bootstrap admin (first-boot
-      token) may call this. Subsequent calls should require cluster_operator role + MFA
-      equivalent (2-approver PR?).
-- [ ] Notification mechanism detail (K8s Event schema, optional webhook)
-- [ ] Actor re-encryption UX — does gitopsapi provide a guided flow (list of files
-      needing re-encryption, per actor)?
-- [ ] GitHub collaborator provisioning scope — is gitopsapi managing org-level
-      access, or repo-level only?
-- [ ] Bootstrap token expiry — what happens if operator doesn't consume within TTL?
-      (Auto-regenerate on next request? Error and require pod restart?)
-- [ ] Multi-instance gitopsapi — does each instance have its own SOPS key, or is
-      there a shared key hierarchy?
-- [ ] `POST /rotate-sops-key` — authorization model (operator-only? requires 2
-      approvals?)
-- [ ] Flux bootstrap wiring — gitopsapi needs to also push a Flux GitRepository +
-      Kustomization pointing at the new repo; where does that go?
-- [ ] Config vs. secrets split — which fields live in ConfigMap (non-sensitive) vs.
-      Secret (sensitive) in the gitopsapi namespace?
+### CAPI Installation
+
+**Providers at launch:** CAPI core + CAPMOX only. No other providers (AWS, Azure, GCP)
+are in scope for v1.
+
+**Helm chart sources:**
+
+| Provider | Helm repo | Chart | Pinned version env var |
+|---|---|---|---|
+| CAPI core | `https://kubernetes-sigs.github.io/cluster-api` | `cluster-api` | `CAPI_VERSION` |
+| CAPMOX | `https://ionos-cloud.github.io/cluster-api-provider-proxmox` | `cluster-api-provider-proxmox` | `CAPMOX_VERSION` |
+
+**Version pinning:** gitopsapi pins both versions. This is a deliberate policy — CAPI
+provider upgrades must be explicit and tested. `POST /bootstrap/upgrade-capi` provides
+the operator upgrade path.
+
+**Repo layout for CAPI HelmReleases** (committed to instance repo):
+
+```
+gitops/
+  gitops-<host-cluster>/
+    01-infrastructure/
+      capi/
+        kustomization.yaml          # Flux Kustomization source
+        helmrepo-capi.yaml          # HelmRepository: cluster-api
+        helmrepo-capmox.yaml        # HelmRepository: cluster-api-provider-proxmox
+        helmrelease-capi.yaml       # HelmRelease: cluster-api chart (pinned version)
+        helmrelease-capmox.yaml     # HelmRelease: cluster-api-provider-proxmox (pinned)
+```
+
+These are written to the instance repo at Phase 4 and reconciled by Flux.
+The host cluster must already have Flux installed before `POST /bootstrap/configure`
+is called (Mode B prerequisite).
+
+---
+
+### Proxmox Endpoint via Cloudflare Tunnel (Mode B)
+
+**v1 design: manual prerequisite.**
+
+The operator must create the Cloudflare tunnel rule for the Proxmox API endpoint
+**before** calling `POST /bootstrap/configure`. gitopsapi does not auto-configure
+tunnel rules during bootstrap.
+
+**Operator checklist:**
+
+1. Ensure cloudflared is installed in the host cluster (Flux-managed HelmRelease)
+2. Create a Cloudflare tunnel ingress rule pointing at the Proxmox API:
+   - Hostname: e.g. `proxmox-venus.podzone.net` (or similar internal DNS)
+   - Service: `https://<proxmox-ip>:8006`
+3. Verify the endpoint is reachable: `curl https://proxmox-venus.podzone.net:8006/api2/json`
+4. Provide this URL as `hypervisor.endpoint` in the `POST /bootstrap/configure` payload
+
+**gitopsapi validation:** if `hypervisor.cf_tunnel: true` is set, gitopsapi performs a
+connectivity check to the endpoint before proceeding. If unreachable, returns `400` with
+`detail: "hypervisor endpoint unreachable — verify Cloudflare tunnel rule is active"`.
+
+**v2 roadmap:** `hypervisor.cf_tunnel_auto_configure: true` — gitopsapi creates the CF
+tunnel ingress rule automatically, requiring `CLOUDFLARE_API_TOKEN` +
+`CLOUDFLARE_ACCOUNT_ID` in the Phase 3 payload or pre-stored via credential store.
+
+---
+
+### Mode Selection Persistence
+
+`management_mode` is stored in the `gitopsapi-config` ConfigMap in the gitopsapi
+namespace immediately after `POST /bootstrap/configure` succeeds.
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gitopsapi-config
+  namespace: gitopsapi
+data:
+  management_mode: "self-hosted"   # or "external"
+  bootstrapped_at: "2026-03-29T12:00:00Z"
+```
+
+**Cat 4 change:** `management_mode` is classified as a prohibited in-place change.
+Changing from Mode A to Mode B (or vice versa) requires full re-bootstrap:
+
+1. Back up SOPS private key from `sops-age` K8s Secret
+2. Delete the gitopsapi namespace and re-deploy
+3. Re-run bootstrap (Phase 1–4)
+4. Actors re-encrypt any secrets that reference the old key (if key changes)
+
+gitopsapi validates mode consistency on startup: if `management_mode` in ConfigMap
+differs from the environment (e.g. kubeconfig mounted vs not mounted), it logs a
+warning and returns 503 until the inconsistency is resolved.
+
+---
+
+### `POST /bootstrap/configure` Authorization Model
+
+| Caller | Token type | Allowed |
+|---|---|---|
+| First-boot operator (bootstrap TTL active) | Bootstrap token | ✅ Full payload |
+| Subsequent call (bootstrap TTL expired) | `cluster_operator` JWT | ✅ Update fields only |
+| Any other role | — | ❌ 403 |
+| Unauthenticated | — | ❌ 401 |
+
+**2-person integrity:** gitopsapi commits the bootstrap configuration to the instance
+repo as a PR (not direct push to main). The operator must approve the PR with a second
+account or collaborator. This is enforced via branch protection rules set up in Phase 4.
+
+Direct-push bootstrap (single-approver) is supported but logged with a warning:
+`"bootstrap commit merged without second approver — review for compliance"`.
+
+---
+
+### Mode B Topology Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          Mode B — Self-Hosted                               │
+│                                                                             │
+│  ┌───────────────────────────────────┐                                     │
+│  │  host k8s cluster                 │                                     │
+│  │  (e.g. single-node k3s / talos)   │                                     │
+│  │                                   │                                     │
+│  │  ┌─────────────┐  ┌────────────┐  │                                     │
+│  │  │  gitopsapi  │  │ CAPI+CAPMOX│  │                                     │
+│  │  │     pod     │  │ (installed │  │                                     │
+│  │  │             │  │ by Phase 3)│  │                                     │
+│  │  └──────┬──────┘  └─────┬──────┘  │                                     │
+│  │         │               │         │                                     │
+│  └─────────┼───────────────┼─────────┘                                     │
+│            │               │                                               │
+│            │ manages       │ provisions via Cloudflare tunnel              │
+│            ▼               ▼                                               │
+│  ┌──────────────┐   ┌──────────────────┐                                  │
+│  │  instance    │   │  Proxmox API     │                                  │
+│  │  repo (git)  │   │  (home lab /     │◄── CF tunnel ──── cloudflared    │
+│  │  management- │   │   remote site)   │                                  │
+│  │  infra       │   └──────────────────┘                                  │
+│  └──────────────┘           │                                             │
+│                             │ VMs / workload clusters                     │
+│                             ▼                                             │
+│                   ┌──────────────────┐                                   │
+│                   │  gitopsdev       │                                   │
+│                   │  gitopsete       │                                   │
+│                   │  musings         │                                   │
+│                   └──────────────────┘                                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+*See also:* `repo-taxonomy.md` for Mode B ETE multi-instance topology (venus + saturn).
+
+---
+
+## Bootstrap Flow — Open Items Resolution
+
+The following items from the original open-items list have been resolved by the spec
+additions above or by the design decisions recorded in this document.
+
+### Resolved
+
+- ✅ **Mode B CAPI installation detail** — CAPI + CAPMOX pinned; Helm repos committed
+  to instance repo under `01-infrastructure/capi/`; `POST /bootstrap/upgrade-capi` for upgrades
+- ✅ **Proxmox via CF tunnel** — v1: manual prerequisite; gitopsapi validates reachability
+- ✅ **Mode selection persistence** — `management_mode` in ConfigMap; Cat 4 change
+- ✅ **`POST /bootstrap/configure` authorization** — bootstrap token (first-boot) only;
+  then `cluster_operator` role; 2-person integrity via PR on bootstrap commit
+- ✅ **Actor re-encryption UX** — `scripts/sops-reencrypt.sh` + `secrets-manifest.yaml`
+  provide guided interactive flow; see "Actor Re-Encryption Scripts" section above
+- ✅ **Notification mechanism** — K8s Event `sops-reencryption-required` + commit to
+  `secrets-manifest.yaml` marking `status: needs-reencryption` + webhook/GUI banner
+
+### Open Items (Further Specification Needed)
+
+- [ ] **Flux bootstrap wiring (Phase 4 circular dependency)** — gitopsapi must push a
+      Flux GitRepository + Kustomization pointing at the new instance repo as part of
+      Phase 4. This creates a potential circular dependency: Flux reads the repo, but
+      gitopsapi is writing to it. Resolution candidates:
+      (a) gitopsapi writes to a `bootstrap/` branch; Flux is pre-configured to read
+          `main` only; operator merges bootstrap branch to activate;
+      (b) gitopsapi applies the GitRepository/Kustomization directly via kubectl (not via
+          the repo) as a one-time imperative step at bootstrap, then manages it declaratively.
+      **Recommended: option (b)** — imperative bootstrap is acceptable for the one-time
+      setup; declarative management follows immediately after.
+- [ ] **Bootstrap token expiry** — if operator does not consume within 24h TTL, the token
+      expires. On next request to `/auth/login` with an expired token, gitopsapi should:
+      **auto-regenerate** (not require pod restart). Rate-limit regeneration to once per
+      10 minutes to prevent abuse. Log each regeneration as a K8s Event.
+- [ ] **Multi-instance SOPS key hierarchy** — each gitopsapi instance has its own SOPS
+      key (confirmed). A shared key hierarchy (parent key encrypting per-instance keys)
+      is **out of scope for v1**. Each instance is independently recoverable. Cross-instance
+      secret access is via API, not shared SOPS keys.
+- [ ] **`POST /rotate-sops-key` authorization** — requires `cluster_operator` role +
+      confirmation from a second `cluster_operator` account (2-person integrity). The
+      second approver reviews and merges the re-encryption PR in the instance repo.
+- [ ] **GitHub collaborator scope** — repo-level only (not org-level) for v1. gitopsapi
+      adds collaborators to specific repos (`management-infra`, `{cluster}-infra`,
+      `{cluster}-apps`) using the minimum required permissions per role.
+- [ ] **Config vs. secrets split** — proposed: `GitOpsAPIConfig` ConfigMap for non-sensitive
+      config (name, forge_ids, mode, bootstrapped_at); K8s Secret for sensitive values
+      (admin password hash, bootstrap token); git credentials stored in a dedicated Secret
+      per `GitRepo` object.
+- [ ] **`POST /bootstrap/upgrade-capi`** endpoint — not yet specified; needs: version
+      target inputs, dry-run mode, rollback plan if upgrade fails mid-flight.
