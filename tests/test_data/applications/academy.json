@@ -1,0 +1,11 @@
+{
+  "_comment": "POST /api/v1/applications — deploy academy to platform-services cluster",
+  "_curl": "curl -s -X POST -H 'Host: gitopsgui.podzone.cloud' -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: build-managers' -d @applications/academy.json http://freyr:8081/api/v1/applications",
+  "name": "academy",
+  "cluster": "platform-services",
+  "helm_repo_url": "https://motttt.github.io/academy",
+  "chart_name": "academy",
+  "chart_version": "0.1.0",
+  "values_yaml": "expose:\n  hostname: academy.podzone.cloud\n  gatewayName: gateway\n  gatewayNamespace: kube-system\nkeycloak:\n  url: https://auth.podzone.cloud\n  realm: podzone\n  clientId: academy\nqdrant:\n  url: http://qdrant.agentsonly.svc.cluster.local:6333\npostgres:\n  host: cloudnativepg.platform-services.svc.cluster.local\n  database: academy\n  credentialsSecret: academy-postgres-credentials\ntutor:\n  ollama:\n    enabled: true\n    endpoint: http://ollama.agentsonly.svc.cluster.local:11434\n    model: llama3.2:1b\n  claude:\n    enabled: false\n  freeTier:\n    sessionLimitEnabled: false\n    sessionLimitValue: 25\n    sessionLimitUnit: turns\n",
+  "app_repo_url": "git@github.com:MoTTTT/academy.git"
+}
