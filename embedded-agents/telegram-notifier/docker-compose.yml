@@ -1,0 +1,14 @@
+services:
+  telegram-notifier:
+    build: .
+    ports:
+      - "8001:8000"
+    env_file:
+      - .env
+    volumes:
+      # Channel registry config (copy from config/channel-registry.yaml.example)
+      - ./config:/config:ro
+      # Reporting sink (delivery logs written here; Hermes commits)
+      - ./reporting:/reporting
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

@@ -1,0 +1,37 @@
+# Channel Registry — telegram-notifier
+# Copy to channel-registry.yaml for local dev (or inject at deployment).
+# Channel IDs and addresses are deployment config — never in code or request payloads.
+# Martin: populate channel_id values before deploying to prod.
+
+channels:
+  # Claude Code agents receive notifications via incoming/ files — not Telegram
+  - actor: hermes
+    type: incoming-file
+    path: team/hermes/incoming/
+    contexts: [dev-build, ete]
+    enabled: true
+
+  - actor: atlas
+    type: incoming-file
+    path: team/atlas/incoming/
+    contexts: [dev-build, ete]
+    enabled: true
+
+  # Human actors — Telegram channels (prod only)
+  - actor: prompt-engineer
+    type: telegram
+    channel_id: ""   # TODO: set Telegram chat/channel ID
+    contexts: [prod]
+    enabled: false   # Enable once channel_id is confirmed
+
+  - actor: executive
+    type: telegram
+    channel_id: ""   # TODO: set Telegram chat/channel ID
+    contexts: [prod]
+    enabled: false
+
+  - actor: it-manager
+    type: telegram
+    channel_id: ""   # TODO: set Telegram chat/channel ID
+    contexts: [prod]
+    enabled: false
