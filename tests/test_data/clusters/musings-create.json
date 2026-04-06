@@ -1,0 +1,28 @@
+{
+  "_comment": "POST /api/v1/clusters — provision musings single-node dev/test cluster (T-026)",
+  "_curl": "curl -s -X POST -H 'Host: gitopsgui.podzone.cloud' -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @clusters/musings-create.json http://freyr:8081/api/v1/clusters",
+  "_schema_gaps": [
+    "Task file (2026-03-28-dev-functional-testing.md) omits vip, ip_range, sops_secret_ref — all required by ClusterSpec.",
+    "Task file has allow_scheduling_on_controlplanes (no underscores) — field is allow_scheduling_on_control_planes.",
+    "Task file has storage.enabled/storage.size — legacy names, migrated by StorageSpec._migrate_legacy_fields.",
+    "Task file has worker_count=1 but task description says 'single node'; single-node requires worker_count=0 + allow_scheduling_on_control_planes=true."
+  ],
+  "name": "musings",
+  "platform": null,
+  "vip": "192.168.4.230",
+  "ip_range": "192.168.4.231-192.168.4.233",
+  "dimensions": {
+    "control_plane_count": 1,
+    "worker_count": 0,
+    "cpu_per_node": 2,
+    "memory_gb_per_node": 4,
+    "boot_volume_gb": 10
+  },
+  "allow_scheduling_on_control_planes": true,
+  "storage": {
+    "internal_linstor": false
+  },
+  "sops_secret_ref": "sops-age",
+  "managed_gitops": false,
+  "gitops_repo_url": "git@github.com:your-org/musings-infra.git"
+}

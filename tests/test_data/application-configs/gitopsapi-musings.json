@@ -1,0 +1,11 @@
+{
+  "_comment": "POST /api/v1/application-deployments — deploy gitopsapi on musings cluster (T-026 Cycle B)",
+  "_curl": "curl -s -X POST -H 'Host: gitopsgui.podzone.cloud' -H 'Content-Type: application/json' -H 'X-Forwarded-User: martin' -H 'X-Auth-Request-Groups: cluster-operators' -d @application-configs/gitopsapi-musings.json http://freyr:8081/api/v1/application-deployments",
+  "app_id": "gitopsapi",
+  "cluster_id": "musings",
+  "chart_version_override": null,
+  "values_override": "",
+  "enabled": true,
+  "pipeline_stage": "dev",
+  "external_hosts": []
+}
