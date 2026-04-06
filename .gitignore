@@ -210,3 +210,19 @@ __marimo__/
 node_modules/
 dist/
 .vite/
+
+# Terraform
+src/bootstrap/venus.tfvars
+src/bootstrap/saturn.tfvars
+src/bootstrap/*.tfvars
+src/bootstrap/.terraform/
+src/bootstrap/.terraform.lock.hcl
+src/bootstrap/terraform.tfstate
+src/bootstrap/terraform.tfstate.backup
+
+# Local dev / tooling
+.DS_Store
+.claude/
+.env.*
+.mcp.json
+*.tgz
