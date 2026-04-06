@@ -94,6 +94,17 @@ class PlatformSpec(BaseModel):
     capabilities: PlatformCapabilities = Field(default_factory=PlatformCapabilities)
 
 
+class ClusterChartSpec(BaseModel):
+    """
+    Records the cluster-chart version binding for a cluster's generated values file.
+    Versioned to match cluster-chart release. 'type' identifies the CAPI provider stack.
+    When CAPI providers beyond proxmox-talos are added, new type values will be introduced.
+    """
+    id: str                         # UUID — unique identifier for this binding instance
+    version: str                    # cluster-chart semver, e.g. "0.1.39"
+    type: str = "proxmox-talos"    # provider type; only "proxmox-talos" currently supported
+
+
 class ClusterSpec(BaseModel):
     name: str
     platform: Optional[PlatformSpec] = None  # null for externally-managed clusters (managed_gitops=False)
@@ -117,6 +128,7 @@ class ClusterSpec(BaseModel):
     # DNS resolution via pfSense Unbound Host Overrides (internal clients only).
     ingress_connector: Optional[IngressConnectorSpec] = None  # CC-068: cloudflared tunnel connector config
     storage: Optional[StorageSpec] = None  # storage class config; None = default (no linstor, no emptydir headroom)
+    cluster_chart: Optional[ClusterChartSpec] = None  # CC-166: cluster-chart version binding (roundtrip metadata)
 
 
 class ClusterSuspendResponse(BaseModel):
