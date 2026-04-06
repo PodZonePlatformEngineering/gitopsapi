@@ -506,8 +506,8 @@ curl -s -X POST http://localhost:8000/api/v1/clusters \
 rsync -az --delete src/ colleymj@192.168.1.201:~/gitopsapi-build/src/
 
 # On erectus:
-docker build -t ghcr.io/motttt/gitopsapi:vX.Y.Z -f Dockerfile.api-only .
-docker push ghcr.io/motttt/gitopsapi:vX.Y.Z
+docker build -t ghcr.io/podzoneplatformengineering/gitopsapi:vX.Y.Z -f Dockerfile.api-only .
+docker push ghcr.io/podzoneplatformengineering/gitopsapi:vX.Y.Z
 ```
 
 The image must be public on ghcr.io (or a `ghcr-pull-secret` imagePullSecret must be configured). As of 2026-03-19, the package was private with a pull blocker — see QUESTIONS.md [CC-078].
@@ -516,18 +516,18 @@ Current deployed image: `v0.1.6` (chart 0.1.3). Update `charts/gitopsapi/values.
 
 ### Helm chart publish
 
-The chart is published as a static GitHub Pages Helm repo at `https://motttt.github.io/gitopsapi`:
+The chart is published as a static GitHub Pages Helm repo at `https://podzoneplatformengineering.github.io/gitopsapi`:
 
 ```bash
 helm package charts/gitopsapi/
 cp gitopsapi-0.1.X.tgz docs/
-helm repo index docs/ --url https://motttt.github.io/gitopsapi
+helm repo index docs/ --url https://podzoneplatformengineering.github.io/gitopsapi
 git add docs/ gitopsapi-0.1.X.tgz
 git commit -m "chore: publish chart 0.1.X"
 git push
 ```
 
-The `docs/index.yaml` is the Helm repo index. The HelmRepository CR in the cluster points to `https://motttt.github.io/gitopsapi`.
+The `docs/index.yaml` is the Helm repo index. The HelmRepository CR in the cluster points to `https://podzoneplatformengineering.github.io/gitopsapi`.
 
 ### Flux on gitopsdev
 

@@ -126,6 +126,6 @@ Phase 5 (Cleanup):    Remove from openclaw bootstrap deployment
   "devCluster": "gitopsdev",
   "eteCluster": "gitopsete",
   "prodCluster": "gitopsprod",
-  "chartRepository": "https://motttt.github.io/gitopsapi"
+  "chartRepository": "https://podzoneplatformengineering.github.io/gitopsapi"
 }
 ```

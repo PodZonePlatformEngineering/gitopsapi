@@ -155,7 +155,7 @@ POST /api/v1/applications
   "name": "nexus",
   "chart": "nexus",
   "chart_version": "0.1.0",
-  "repo_url": "https://motttt.github.io/gitopsapi-apps"
+  "repo_url": "https://podzoneplatformengineering.github.io/gitopsapi-apps"
 }
 ```
 

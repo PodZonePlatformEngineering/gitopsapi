@@ -119,7 +119,7 @@ helm upgrade --install gitopsapi gitopsapi/gitopsapi \
 Install from GitHub Pages Helm repository:
 
 ```bash
-helm repo add gitopsapi https://motttt.github.io/gitopsapi
+helm repo add gitopsapi https://podzoneplatformengineering.github.io/gitopsapi
 helm repo update
 helm install gitopsapi gitopsapi/gitopsapi \
   --namespace gitopsapi \
