@@ -25,7 +25,7 @@ from ..models.cluster import (
     ClusterSuspendResponse, ClusterDecommissionResponse,
     IngressConnectorSpec, IngressConnectorResponse,
     StorageClassesResponse, GatewayWireResponse,
-    PlatformSpec, StorageSpec,
+    PlatformSpec, StorageSpec, ClusterChartSpec,
 )
 from ..models.deploy_key import ClusterBootstrapRequest, ClusterBootstrapResponse
 from .git_service import GitService
@@ -359,6 +359,12 @@ def _render_values(spec: ClusterSpec, machine_template_hash: Optional[str] = Non
         data["kubernetes_version"] = spec.kubernetes_version
     if spec.talos_image:
         data["talos_image"] = spec.talos_image
+    if spec.cluster_chart:
+        data["cluster_chart"] = {
+            "id": spec.cluster_chart.id,
+            "version": spec.cluster_chart.version,
+            "type": spec.cluster_chart.type,
+        }
     return yaml.dump(data, default_flow_style=False)
 
 
@@ -876,6 +882,9 @@ class ClusterService:
         raw_storage = data.get("storage")
         storage = StorageSpec(**raw_storage) if isinstance(raw_storage, dict) else None
 
+        raw_cluster_chart = data.get("cluster_chart")
+        cluster_chart = ClusterChartSpec(**raw_cluster_chart) if isinstance(raw_cluster_chart, dict) else None
+
         spec = ClusterSpec(
             name=name,
             platform=platform,
@@ -889,6 +898,7 @@ class ClusterService:
             internal_hosts=data.get("internal_hosts", []),
             ingress_connector=ingress_connector,
             storage=storage,
+            cluster_chart=cluster_chart,
         )
         return ClusterResponse(name=name, spec=spec)
 

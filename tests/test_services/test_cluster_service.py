@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from gitopsgui.models.cluster import (
     ClusterSpec, ClusterDimensions, PlatformSpec, TalosTemplateSpec,
-    IngressConnectorSpec, TokenSecretRef,
+    IngressConnectorSpec, TokenSecretRef, ClusterChartSpec,
 )
 from gitopsgui.services.cluster_service import (
     ClusterService, _render_values, _render_kustomization, _render_cluster_yaml,
@@ -1186,3 +1186,54 @@ def test_musings_cluster_storage_disabled():
     parsed = yaml.safe_load(_render_values(musings))
     assert parsed["storage"]["internal_linstor"] is False
     assert "linstor_disk_gb" not in parsed["storage"]
+
+
+# ---------------------------------------------------------------------------
+# CC-166 — ClusterChartSpec roundtrip
+# ---------------------------------------------------------------------------
+
+def test_render_values_cluster_chart_written():
+    """cluster_chart section is written into values when set on ClusterSpec."""
+    spec = _SPEC.model_copy(update={
+        "cluster_chart": ClusterChartSpec(
+            id="a1b2c3d4-0000-0000-0000-000000000001",
+            version="0.1.39",
+            type="proxmox-talos",
+        ),
+    })
+    import yaml
+    parsed = yaml.safe_load(_render_values(spec))
+    assert "cluster_chart" in parsed
+    assert parsed["cluster_chart"]["id"] == "a1b2c3d4-0000-0000-0000-000000000001"
+    assert parsed["cluster_chart"]["version"] == "0.1.39"
+    assert parsed["cluster_chart"]["type"] == "proxmox-talos"
+
+
+def test_render_values_cluster_chart_omitted_when_none():
+    """cluster_chart section is absent when ClusterSpec.cluster_chart is None."""
+    import yaml
+    parsed = yaml.safe_load(_render_values(_SPEC))
+    assert "cluster_chart" not in parsed
+
+
+async def test_get_cluster_roundtrips_cluster_chart():
+    """ClusterSpec.cluster_chart survives a _render_values → get_cluster roundtrip."""
+    original = _SPEC.model_copy(update={
+        "cluster_chart": ClusterChartSpec(
+            id="a1b2c3d4-0000-0000-0000-000000000002",
+            version="0.1.39",
+            type="proxmox-talos",
+        ),
+    })
+    rendered = _render_values(original)
+
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.read_file = AsyncMock(return_value=rendered)
+
+    result = await svc.get_cluster("test-cluster")
+    assert result is not None
+    assert result.spec.cluster_chart is not None
+    assert result.spec.cluster_chart.id == "a1b2c3d4-0000-0000-0000-000000000002"
+    assert result.spec.cluster_chart.version == "0.1.39"
+    assert result.spec.cluster_chart.type == "proxmox-talos"
