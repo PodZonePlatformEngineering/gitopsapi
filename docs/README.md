@@ -22,16 +22,4 @@ helm install gitopsapi gitopsapi/gitopsapi \
 
 - **v0.1.0** — Initial release
 
-## GitHub Pages Setup (One-Time)
-
-1. Go to: [github.com/PodZone/gitopsapi/settings/pages](https://github.com/PodZone/gitopsapi/settings/pages)
-2. **Source:** Deploy from a branch
-3. **Branch:** main
-4. **Folder:** /docs
-5. Click **Save**
-
-GitHub Pages will be available at: https://podzoneplatformengineering.github.io/gitopsapi
-
----
-
 **Chart Source:** `charts/gitopsapi/` in this repository
