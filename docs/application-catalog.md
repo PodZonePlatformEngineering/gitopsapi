@@ -15,13 +15,13 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 
 **Description**: GitOps platform API — manages application lifecycle, cluster configuration, change pipelines, and promotion across dev/ETE/prod.
 **GitHub**: <https://github.com/PodZone/gitopsapi>
-**Web**: <https://motttt.github.io/gitopsapi>
+**Web**: <https://podzoneplatformengineering.github.io/gitopsapi>
 **Category**: Platform Management, Internal Tooling
 
 | Field | Value |
 | --- | --- |
 | name | gitopsapi |
-| helmRepo | <https://motttt.github.io/gitopsapi> |
+| helmRepo | <https://podzoneplatformengineering.github.io/gitopsapi> |
 | chart | gitopsapi |
 | chartVersion | 0.1.2 |
 | namespace | gitopsapi |
@@ -40,7 +40,7 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 | Field | Value |
 | --- | --- |
 | name | gitopsgui |
-| helmRepo | ⚠️ RECOMMENDED: <https://motttt.github.io/gitopsgui> |
+| helmRepo | ⚠️ RECOMMENDED: <https://podzoneplatformengineering.github.io/gitopsgui> |
 | chart | ⚠️ RECOMMENDED: gitopsgui |
 | chartVersion | ⚠️ RECOMMENDED: 0.1.0 |
 | namespace | gitopsgui |
@@ -287,12 +287,12 @@ Seed catalog for GitOpsAPI. Extracted from cluster09 GitOps repos, gitopsdev-app
 | Field | Value |
 | --- | --- |
 | name | podzone-mpc |
-| helmRepo | <https://motttt.github.io/podzone-mpc> |
+| helmRepo | <https://podzoneplatformengineering.github.io/podzone-mpc> |
 | chart | podzone-mpc |
 | chartVersion | 0.1.0 |
 | namespace | podzone-mpc |
 | applicationRepo | <https://github.com/PodZone/podzone-mpc> |
-| image | ghcr.io/motttt/podzone-mpc:v0.1.0 |
+| image | ghcr.io/podzoneplatformengineering/podzone-mpc:v0.1.0 |
 
 **Dependencies**: Qdrant (in-cluster, `qdrant.qdrant.svc.cluster.local:6333`), Ollama (`ollama.ollama.svc.cluster.local:11434`), model `nomic-embed-text`
 

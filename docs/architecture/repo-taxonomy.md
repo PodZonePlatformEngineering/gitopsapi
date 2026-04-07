@@ -22,7 +22,7 @@ Read alongside: `zero-trust-bootstrap.md` (trust model), `promotion-pipeline.md`
 
 ### 1. gitopsapi instance repo
 
-**Example (podzone dev):** `MoTTTT/management-infra`
+**Example (podzone dev):** `PodZonePlatformEngineering/management-infra`
 **Owner:** gitopsapi instance (writes), Flux on the management cluster (reads)
 **Env var:** `GITOPS_REPO_URL`
 
@@ -54,7 +54,7 @@ stored encrypted under the instance key. Instance recovery recovers all per-clus
 
 ### 2. cluster-infra repo
 
-**Example:** `MoTTTT/gitopsdev-infra`, `MoTTTT/gitopsete-infra`
+**Example:** `PodZonePlatformEngineering/gitopsdev-infra`, `PodZonePlatformEngineering/gitopsete-infra`
 **Owner:** gitopsapi writes, Flux on the workload cluster reads
 **Naming convention:** `{cluster-name}-infra`
 
@@ -77,7 +77,7 @@ by subsequent wire endpoints. Contains:
 
 ### 3. cluster-apps repo
 
-**Example:** `MoTTTT/gitopsdev-apps`, `MoTTTT/gitopsete-apps`
+**Example:** `PodZonePlatformEngineering/gitopsdev-apps`, `PodZonePlatformEngineering/gitopsete-apps`
 **Owner:** gitopsapi writes, Flux on the workload cluster reads
 **Naming convention:** `{cluster-name}-apps`
 
@@ -92,7 +92,7 @@ infrastructure changes.
 
 ### 4. shared-infra repo
 
-**Example:** `MoTTTT/shared-infra`
+**Example:** `PodZonePlatformEngineering/shared-infra`
 **Owner:** cluster operator maintains; multiple clusters read
 **Env var:** referenced by Kustomization `sourceRef` in the management cluster's
 `infrastructure.yaml`
@@ -108,7 +108,7 @@ environment variants (dev vs prod Cilium config).
 
 ### 5. cluster-charts repo
 
-**Example:** `MoTTTT/cluster-charts`
+**Example:** `PodZonePlatformEngineering/cluster-charts`
 **Owner:** cluster operator / gitopsapi developer
 **Env vars:** `GITOPS_CLUSTER_CHART_REPO_URL`, `GITOPS_CLUSTER_CHART_REPO_NAME`
 (default: `cluster-charts`), `GITOPS_CLUSTER_CHART_VERSION` (default: `0.1.20`)
@@ -122,13 +122,13 @@ management cluster configuration.
 provider versions differ — controlled via `GITOPS_CLUSTER_CHART_VERSION`.
 
 **Source:** `/Users/martincolley/workspace/code/cluster-chart/` (chart source)
-Published to: `MoTTTT/cluster09` gh-pages branch.
+Published to: `PodZonePlatformEngineering/cluster09` gh-pages branch.
 
 ---
 
 ### 6. app catalog repo
 
-**Example:** `MoTTTT/gitopsapi-apps`
+**Example:** `PodZonePlatformEngineering/gitopsapi-apps`
 **Owner:** cluster operator / gitopsapi developer
 **Env var:** `GITOPS_CATALOG_REPO_URL`
 
@@ -151,7 +151,7 @@ is read-only at runtime — gitopsapi never writes to it.
 
 ### 7. gitopsapi source repo
 
-**Example:** `MoTTTT/gitopsapi`
+**Example:** `PodZonePlatformEngineering/gitopsapi`
 **Owner:** development team
 
 The gitopsapi application source code. Not managed by gitopsapi at runtime. Deployed
@@ -162,7 +162,7 @@ directly via `helm install` (bootstrap mode).
 
 ### 8. gitopsgui source repo
 
-**Example:** `MoTTTT/gitopsgui`
+**Example:** `PodZonePlatformEngineering/gitopsgui`
 **Owner:** development team
 
 The React frontend for gitopsapi. Not managed by gitopsapi at runtime. Deployed

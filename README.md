@@ -88,11 +88,11 @@ See [docs/claude-code-setup-guide.md](docs/claude-code-setup-guide.md) for the f
 
 ## Deployment
 
-Helm chart published to GitHub Pages: `https://motttt.github.io/gitopsapi`
+Helm chart published to GitHub Pages: `https://podzoneplatformengineering.github.io/gitopsapi`
 
 ```yaml
 # HelmRepository
-url: https://motttt.github.io/gitopsapi
+url: https://podzoneplatformengineering.github.io/gitopsapi
 
 # HelmRelease
 chart: gitopsapi

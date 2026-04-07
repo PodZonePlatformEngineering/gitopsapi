@@ -1,11 +1,11 @@
 # GitOpsAPI Helm Chart Repository
 
-**Repository URL:** https://motttt.github.io/gitopsapi
+**Repository URL:** https://podzoneplatformengineering.github.io/gitopsapi
 
 ## Adding the Helm Repository
 
 ```bash
-helm repo add gitopsapi https://motttt.github.io/gitopsapi
+helm repo add gitopsapi https://podzoneplatformengineering.github.io/gitopsapi
 helm repo update
 ```
 
@@ -30,7 +30,7 @@ helm install gitopsapi gitopsapi/gitopsapi \
 4. **Folder:** /docs
 5. Click **Save**
 
-GitHub Pages will be available at: https://motttt.github.io/gitopsapi
+GitHub Pages will be available at: https://podzoneplatformengineering.github.io/gitopsapi
 
 ---
 

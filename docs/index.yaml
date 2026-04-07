@@ -10,7 +10,7 @@ entries:
     name: gitopsapi
     type: application
     urls:
-    - https://motttt.github.io/gitopsapi/gitopsapi-0.1.3.tgz
+    - https://podzoneplatformengineering.github.io/gitopsapi/gitopsapi-0.1.3.tgz
     version: 0.1.3
   - apiVersion: v2
     appVersion: v0.1.5
@@ -21,7 +21,7 @@ entries:
     name: gitopsapi
     type: application
     urls:
-    - https://motttt.github.io/gitopsapi/gitopsapi-0.1.2.tgz
+    - https://podzoneplatformengineering.github.io/gitopsapi/gitopsapi-0.1.2.tgz
     version: 0.1.2
   - apiVersion: v2
     appVersion: latest
@@ -32,7 +32,7 @@ entries:
     name: gitopsapi
     type: application
     urls:
-    - https://motttt.github.io/gitopsapi/gitopsapi-0.1.1.tgz
+    - https://podzoneplatformengineering.github.io/gitopsapi/gitopsapi-0.1.1.tgz
     version: 0.1.1
   - apiVersion: v2
     appVersion: latest
@@ -43,6 +43,6 @@ entries:
     name: gitopsapi
     type: application
     urls:
-    - https://motttt.github.io/gitopsapi/gitopsapi-0.1.0.tgz
+    - https://podzoneplatformengineering.github.io/gitopsapi/gitopsapi-0.1.0.tgz
     version: 0.1.0
 generated: "2026-03-19T01:49:54.078736Z"

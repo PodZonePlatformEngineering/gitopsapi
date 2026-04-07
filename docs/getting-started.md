@@ -33,7 +33,7 @@ Start with read-only, add secrets as you need each capability.
 Add the GitOpsAPI Helm repository:
 
 ```bash
-helm repo add gitopsapi https://motttt.github.io/gitopsapi
+helm repo add gitopsapi https://podzoneplatformengineering.github.io/gitopsapi
 helm repo update
 ```
 
