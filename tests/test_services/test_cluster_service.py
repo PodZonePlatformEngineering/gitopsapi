@@ -7,6 +7,22 @@ import httpx
 import yaml as _yaml
 from unittest.mock import AsyncMock, MagicMock, patch
 
+
+# ---------------------------------------------------------------------------
+# T-035 (CC-175) — module-wide autouse fixture
+# ---------------------------------------------------------------------------
+# retrieve_age_key makes K8s API calls in production. All tests in this module
+# should use the stub to avoid any dependency on a live cluster. Tests that
+# specifically test the ValueError/422 path monkeypatch retrieve_age_key directly.
+
+@pytest.fixture(autouse=True)
+def _stub_retrieve_age_key(monkeypatch):
+    """Stub retrieve_age_key for all tests — returns a safe placeholder key."""
+    monkeypatch.setattr(
+        "gitopsgui.services.cluster_service.retrieve_age_key",
+        lambda ref: "AGE-SECRET-KEY-1FAKESTUBTESTKEY",
+    )
+
 from gitopsgui.models.cluster import (
     ClusterSpec, ClusterDimensions, PlatformSpec, TalosTemplateSpec,
     IngressConnectorSpec, TokenSecretRef, ClusterChartSpec, StorageSpec,
@@ -23,6 +39,7 @@ from gitopsgui.services.cluster_service import (
     _STATIC_INLINE_MANIFESTS, _PIRAEUS_INFRA_PATH,
     _build_cilium_helm_args, generate_cilium_manifest,
     CILIUM_HELM_DEFAULTS,
+    retrieve_age_key, generate_fluxinstance_manifest, generate_sops_secret_manifest,
 )
 
 
@@ -2156,3 +2173,249 @@ async def test_create_cluster_no_cilium_when_flannel(monkeypatch):
     data = _yaml_check.safe_load(written_values)
     inline_names = [m["name"] for m in data.get("inlineManifests", [])]
     assert "cilium" not in inline_names
+
+
+# ---------------------------------------------------------------------------
+# T-035 (CC-175) — fluxinstance + sops-age InlineManifests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=False)
+def skip_k8s(monkeypatch):
+    """Set GITOPS_SKIP_K8S=1 to prevent real K8s calls in all T-035 tests."""
+    monkeypatch.setenv("GITOPS_SKIP_K8S", "1")
+    # Also patch the module-level flag so already-imported code sees it
+    monkeypatch.setattr("gitopsgui.services.cluster_service._SKIP_K8S", True)
+
+
+# --- generate_fluxinstance_manifest ---
+
+def test_generate_fluxinstance_manifest_piraeus_storage_class(skip_k8s):
+    """storage.internal_linstor=True → storageClass piraeus-datastore."""
+    spec = _SPEC.model_copy(update={
+        "storage": StorageSpec(internal_linstor=True),
+        "gitops_repo_url": "https://github.com/test/test-cluster-infra",
+    })
+    out = generate_fluxinstance_manifest(spec)
+    assert "piraeus-datastore" in out
+    assert "FluxInstance" in out
+
+
+def test_generate_fluxinstance_manifest_standard_storage_class(skip_k8s):
+    """storage.internal_linstor=False → storageClass standard."""
+    spec = _SPEC.model_copy(update={
+        "storage": StorageSpec(internal_linstor=False),
+        "gitops_repo_url": "https://github.com/test/test-cluster-infra",
+    })
+    out = generate_fluxinstance_manifest(spec)
+    assert "class: standard" in out
+
+
+def test_generate_fluxinstance_manifest_no_storage_uses_standard(skip_k8s):
+    """storage=None → storageClass standard."""
+    spec = _SPEC.model_copy(update={
+        "storage": None,
+        "gitops_repo_url": "https://github.com/test/test-cluster-infra",
+    })
+    out = generate_fluxinstance_manifest(spec)
+    assert "class: standard" in out
+
+
+def test_generate_fluxinstance_manifest_uses_gitops_repo_url(skip_k8s):
+    """gitops_repo_url set → appears in manifest url field."""
+    spec = _SPEC.model_copy(update={
+        "gitops_repo_url": "https://github.com/custom-org/custom-infra",
+        "storage": None,
+    })
+    out = generate_fluxinstance_manifest(spec)
+    assert "https://github.com/custom-org/custom-infra" in out
+
+
+def test_generate_fluxinstance_manifest_constructs_url_from_cluster_name(skip_k8s):
+    """gitops_repo_url=None → URL constructed from cluster name."""
+    spec = _SPEC.model_copy(update={
+        "gitops_repo_url": None,
+        "storage": None,
+        "managed_gitops": False,
+    })
+    out = generate_fluxinstance_manifest(spec)
+    assert "test-cluster-infra" in out
+    assert "PodZonePlatformEngineering" in out
+
+
+def test_generate_fluxinstance_manifest_contains_flux_system_namespace(skip_k8s):
+    """FluxInstance must be in flux-system namespace."""
+    spec = _SPEC.model_copy(update={"storage": None, "gitops_repo_url": "https://github.com/x/y"})
+    out = generate_fluxinstance_manifest(spec)
+    assert "namespace: flux-system" in out
+
+
+def test_generate_fluxinstance_manifest_contains_sops_decryption_patch(skip_k8s):
+    """FluxInstance includes kustomize patch for SOPS decryption."""
+    spec = _SPEC.model_copy(update={"storage": None, "gitops_repo_url": "https://github.com/x/y"})
+    out = generate_fluxinstance_manifest(spec)
+    assert "sops-age" in out
+    assert "decryption" in out
+
+
+# --- generate_sops_secret_manifest ---
+
+def test_generate_sops_secret_manifest_contains_age_key(skip_k8s):
+    """SOPS secret manifest wraps age key in stringData.age.agekey."""
+    test_key = "AGE-SECRET-KEY-1TESTKEY"
+    out = generate_sops_secret_manifest(test_key)
+    assert test_key in out
+    assert "age.agekey" in out
+    assert "stringData" in out
+
+
+def test_generate_sops_secret_manifest_is_flux_system(skip_k8s):
+    """SOPS secret manifest targets flux-system namespace."""
+    out = generate_sops_secret_manifest("AGE-SECRET-KEY-1FAKE")
+    assert "namespace: flux-system" in out
+    assert "name: sops-age" in out
+
+
+def test_generate_sops_secret_manifest_valid_yaml(skip_k8s):
+    """SOPS secret manifest is valid YAML."""
+    import yaml as _y
+    out = generate_sops_secret_manifest("AGE-SECRET-KEY-1FAKE")
+    docs = list(_y.safe_load_all(out))
+    assert any(d for d in docs if d and d.get("kind") == "Secret")
+
+
+# --- retrieve_age_key ---
+
+def test_retrieve_age_key_returns_stub_with_skip_k8s(skip_k8s):
+    """With GITOPS_SKIP_K8S=1, retrieve_age_key returns the stub key."""
+    result = retrieve_age_key("sops-age-testcluster")
+    assert result.startswith("AGE-SECRET-KEY")
+
+
+def test_retrieve_age_key_stub_does_not_expose_real_key(skip_k8s):
+    """Stub key returned must be a recognisable placeholder, not a real secret."""
+    result = retrieve_age_key("sops-age-testcluster")
+    # Stub contains FAKESTUB — confirms it's the test placeholder
+    assert "FAKE" in result or "STUB" in result or "TEST" in result
+
+
+# --- create_cluster integration ---
+
+def _make_svc_with_mocks():
+    """Return a ClusterService with all external I/O mocked."""
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.create_branch = AsyncMock()
+    svc._git.write_file = AsyncMock()
+    svc._git.commit = AsyncMock(return_value="sha123")
+    svc._git.push = AsyncMock()
+    svc._gh = AsyncMock()
+    svc._gh.create_pr = AsyncMock(return_value="https://github.com/test/repo/pull/99")
+    return svc
+
+
+def _extract_written_values(svc) -> str:
+    """Pull the values YAML from mock write_file calls."""
+    for call in svc._git.write_file.call_args_list:
+        path = call.args[0]
+        if "values" in path:
+            return call.args[1]
+    return ""
+
+
+@pytest.mark.asyncio
+async def test_create_cluster_fluxinstance_always_present(monkeypatch, skip_k8s):
+    """fluxinstance InlineManifest is always appended in create_cluster()."""
+    monkeypatch.setattr(
+        "gitopsgui.services.cluster_service.fetch_static_inline_manifests",
+        lambda: [],
+    )
+    spec = _SPEC.model_copy(update={"sops_secret_ref": ""})  # no SOPS key
+    svc = _make_svc_with_mocks()
+    await svc.create_cluster(spec)
+
+    values = _extract_written_values(svc)
+    assert "fluxinstance" in values
+
+
+@pytest.mark.asyncio
+async def test_create_cluster_sops_age_present_when_sops_secret_ref_set(monkeypatch, skip_k8s):
+    """sops-age InlineManifest is appended when sops_secret_ref is set."""
+    monkeypatch.setattr(
+        "gitopsgui.services.cluster_service.fetch_static_inline_manifests",
+        lambda: [],
+    )
+    spec = _SPEC.model_copy(update={"sops_secret_ref": "sops-age-testcluster"})
+    svc = _make_svc_with_mocks()
+    await svc.create_cluster(spec)
+
+    values = _extract_written_values(svc)
+    data = _yaml.safe_load(values)
+    inline_names = [m["name"] for m in data.get("inlineManifests", [])]
+    assert "sops-age" in inline_names
+
+
+@pytest.mark.asyncio
+async def test_create_cluster_sops_age_absent_when_no_sops_secret_ref(monkeypatch, skip_k8s):
+    """sops-age InlineManifest is NOT appended when sops_secret_ref is empty/None."""
+    monkeypatch.setattr(
+        "gitopsgui.services.cluster_service.fetch_static_inline_manifests",
+        lambda: [],
+    )
+    spec = _SPEC.model_copy(update={"sops_secret_ref": ""})
+    svc = _make_svc_with_mocks()
+    await svc.create_cluster(spec)
+
+    values = _extract_written_values(svc)
+    data = _yaml.safe_load(values)
+    inline_names = [m["name"] for m in data.get("inlineManifests", [])]
+    assert "sops-age" not in inline_names
+
+
+@pytest.mark.asyncio
+async def test_create_cluster_422_when_sops_secret_not_found(monkeypatch, skip_k8s):
+    """create_cluster raises HTTPException(422) when sops_secret_ref Secret is absent."""
+    from fastapi import HTTPException
+    monkeypatch.setattr(
+        "gitopsgui.services.cluster_service.fetch_static_inline_manifests",
+        lambda: [],
+    )
+    # Monkeypatch retrieve_age_key to simulate Secret not found
+    monkeypatch.setattr(
+        "gitopsgui.services.cluster_service.retrieve_age_key",
+        lambda ref: (_ for _ in ()).throw(
+            ValueError(f"SOPS Secret '{ref}' not found in namespace 'gitopsapi'.")
+        ),
+    )
+    spec = _SPEC.model_copy(update={"sops_secret_ref": "sops-age-missing"})
+    svc = _make_svc_with_mocks()
+    with pytest.raises(HTTPException) as exc_info:
+        await svc.create_cluster(spec)
+    assert exc_info.value.status_code == 422
+    assert "sops-age-missing" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_create_cluster_inline_manifest_ordering(monkeypatch, skip_k8s):
+    """InlineManifests appear in the correct order: static → fluxinstance → sops-age."""
+    static = [
+        {"name": "kubelet-serving-cert-approver", "contents": "# ksa\n"},
+        {"name": "metrics-server", "contents": "# ms\n"},
+        {"name": "gateway-api", "contents": "# gw\n"},
+    ]
+    monkeypatch.setattr(
+        "gitopsgui.services.cluster_service.fetch_static_inline_manifests",
+        lambda: static,
+    )
+    spec = _SPEC.model_copy(update={"sops_secret_ref": "sops-age-testcluster"})
+    svc = _make_svc_with_mocks()
+    await svc.create_cluster(spec)
+
+    values = _extract_written_values(svc)
+    data = _yaml.safe_load(values)
+    inline_names = [m["name"] for m in data.get("inlineManifests", [])]
+    # Ordering: static manifests, then fluxinstance, then sops-age
+    assert inline_names.index("kubelet-serving-cert-approver") < inline_names.index("fluxinstance")
+    assert inline_names.index("metrics-server") < inline_names.index("fluxinstance")
+    assert inline_names.index("gateway-api") < inline_names.index("fluxinstance")
+    assert inline_names.index("fluxinstance") < inline_names.index("sops-age")

@@ -126,8 +126,8 @@ def fetch_static_inline_manifests() -> list:
 #   2. metrics-server (T-036)
 #   3. gateway-api (T-036)
 #   4. cilium (this task) — only when network.type="cilium"
-#   5. fluxinstance (T-035 — future)
-#   6. sops-age (T-035 — future)
+#   5. fluxinstance (T-035) — always
+#   6. sops-age (T-035) — when sops_secret_ref set
 
 CILIUM_HELM_DEFAULTS = {
     "ipam.mode": "kubernetes",
@@ -268,6 +268,131 @@ def _ensure_cilium_helm_repo() -> None:
             "helm repo update cilium failed at startup (helm may be offline): %s",
             result.stderr,
         )
+
+
+# ---------------------------------------------------------------------------
+# T-035 (CC-175) — fluxinstance + sops-age InlineManifests
+# ---------------------------------------------------------------------------
+# FluxInstance and the SOPS age key are cluster-specific and sensitive.
+# They are embedded as InlineManifests so the cluster is fully self-bootstrapping.
+#
+# Ordering (authoritative — see also T-036 and T-039 above):
+#   1. kubelet-serving-cert-approver (T-036)
+#   2. metrics-server (T-036)
+#   3. gateway-api (T-036)
+#   4. cilium (T-039, when network.type="cilium")
+#   5. fluxinstance (this task — always)
+#   6. sops-age (this task — when sops_secret_ref set)
+
+GITOPSAPI_NAMESPACE = os.environ.get("GITOPSAPI_NAMESPACE", "gitopsapi")
+_SKIP_K8S = os.environ.get("GITOPS_SKIP_K8S", "") == "1"
+
+
+def retrieve_age_key(sops_secret_ref: str) -> str:
+    """Read the SOPS age private key from the management cluster Secret.
+
+    sops_secret_ref is the Secret name in GITOPSAPI_NAMESPACE.
+    Raises ValueError if Secret not found — caller should return 422.
+    Returns a stub key when GITOPS_SKIP_K8S=1 (test/dev mode).
+
+    Re-reads GITOPS_SKIP_K8S from the environment at call time so that
+    monkeypatch.setenv works correctly in tests.
+    """
+    if os.environ.get("GITOPS_SKIP_K8S", "") == "1":
+        return "AGE-SECRET-KEY-1FAKESTUBTESTKEY"
+    from kubernetes import client as k8s_client, config as k8s_config
+    from kubernetes.client.exceptions import ApiException as K8sApiException
+    import base64
+    try:
+        k8s_config.load_incluster_config()
+    except k8s_config.ConfigException:
+        k8s_config.load_kube_config()
+    core_api = k8s_client.CoreV1Api()
+    try:
+        secret = core_api.read_namespaced_secret(
+            name=sops_secret_ref,
+            namespace=GITOPSAPI_NAMESPACE,
+        )
+    except K8sApiException as e:
+        if e.status == 404:
+            raise ValueError(
+                f"SOPS Secret '{sops_secret_ref}' not found in namespace "
+                f"'{GITOPSAPI_NAMESPACE}'. Run sops_bootstrap() before create_cluster()."
+            )
+        raise
+    raw = (secret.data or {}).get("age.agekey") or (secret.string_data or {}).get("age.agekey")
+    if not raw:
+        raise ValueError(f"Secret '{sops_secret_ref}' has no 'age.agekey' field.")
+    return base64.b64decode(raw).decode() if secret.data and secret.data.get("age.agekey") else raw
+
+
+def generate_fluxinstance_manifest(spec: "ClusterSpec") -> str:
+    """Generate FluxInstance CR YAML for the given cluster spec.
+
+    Storage class derived from spec.storage.internal_linstor:
+      True  → piraeus-datastore
+      False → standard
+
+    GitOps URL: spec.gitops_repo_url when set; otherwise constructed from cluster name.
+    """
+    gitops_url = spec.gitops_repo_url or (
+        f"https://github.com/PodZonePlatformEngineering/{spec.name}-infra"
+    )
+    storage_class = "piraeus-datastore" if (
+        spec.storage and spec.storage.internal_linstor
+    ) else "standard"
+    return f"""\
+---
+apiVersion: fluxcd.controlplane.io/v1
+kind: FluxInstance
+metadata:
+  name: flux
+  namespace: flux-system
+spec:
+  distribution:
+    version: "2.x"
+    registry: ghcr.io/fluxcd
+  components:
+    - source-controller
+    - kustomize-controller
+    - helm-controller
+    - notification-controller
+  storage:
+    class: {storage_class}
+    size: "10Gi"
+  sync:
+    kind: GitRepository
+    url: "{gitops_url}"
+    ref: "refs/heads/main"
+    path: "./"
+    pullSecret: "flux-system"
+  kustomize:
+    patches:
+      - patch: |
+          - op: add
+            path: /spec/decryption
+            value:
+              provider: sops
+              secretRef:
+                name: sops-age
+        target:
+          kind: Kustomization
+"""
+
+
+def generate_sops_secret_manifest(age_key: str) -> str:
+    """Wrap the age private key in a K8s Secret YAML for flux-system/sops-age."""
+    return f"""\
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sops-age
+  namespace: flux-system
+type: Opaque
+stringData:
+  age.agekey: {age_key}
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -1409,6 +1534,25 @@ class ClusterService:
                     ),
                 ) from exc
             inline_manifests.append({"name": "cilium", "contents": cilium_yaml})
+
+        # T-035 (CC-175): append fluxinstance InlineManifest — always required.
+        inline_manifests.append({
+            "name": "fluxinstance",
+            "contents": generate_fluxinstance_manifest(spec),
+        })
+
+        # T-035 (CC-175): append sops-age InlineManifest when sops_secret_ref is set.
+        # Reads the age private key from the management cluster Secret written by sops_bootstrap().
+        # Returns 422 if the Secret is absent — caller must run sops_bootstrap() first.
+        if spec.sops_secret_ref:
+            try:
+                age_key = retrieve_age_key(spec.sops_secret_ref)
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+            inline_manifests.append({
+                "name": "sops-age",
+                "contents": generate_sops_secret_manifest(age_key),
+            })
 
         branch = f"cluster/provision-{spec.name}-{uuid.uuid4().hex[:8]}"
         await self._git.create_branch(branch)

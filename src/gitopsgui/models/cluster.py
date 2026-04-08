@@ -155,8 +155,10 @@ class NetworkSpec(BaseModel):
     # Default: cluster-chart uses Kubernetes default.
 
     # ---- Cilium: version ----
-    cilium_version: str = "1.17.4"
+    cilium_version: str = "1.19.2"
     # Cilium helm chart version used by T-039 to generate the InlineManifest.
+    # Type-approval baseline: 1.19.2 (current stable, 2026-04-08; requires k8s >= 1.21, helm >= 3.0).
+    # Previously deployed on freyr: 1.17.4.
     # Cat 1 — changing version triggers new InlineManifest content → new MachineTemplate
     # → rolling node replacement.
 

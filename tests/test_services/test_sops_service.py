@@ -76,58 +76,72 @@ def test_encrypt_calls_age_subprocess():
 
 
 # ---------------------------------------------------------------------------
-# _install_sops_secret — now takes kubeconfig_dict, not a context string
+# _install_sops_secret — stores key in management cluster gitopsapi namespace
 # ---------------------------------------------------------------------------
+# New interface: (cluster_name: str, private_key: str)
+# Stores as sops-age-{cluster_name} Secret in gitopsapi namespace.
+# Uses load_incluster_config / load_kube_config (not load_kube_config_from_dict).
 
 def test_install_sops_secret_skips_when_skip_k8s():
     with patch("gitopsgui.services.sops_service.SKIP_K8S", True), \
          patch("gitopsgui.services.sops_service.config") as mock_cfg, \
          patch("gitopsgui.services.sops_service.client"):
-        _install_sops_secret({}, "PRIV")
+        _install_sops_secret("gitopsdev", "PRIV")
 
-    mock_cfg.load_kube_config_from_dict.assert_not_called()
-
-
-def test_install_sops_secret_creates_secret():
-    mock_v1 = MagicMock()
-    with patch("gitopsgui.services.sops_service.SKIP_K8S", False), \
-         patch("gitopsgui.services.sops_service.config"), \
-         patch("gitopsgui.services.sops_service.client") as mock_client:
-        mock_client.CoreV1Api.return_value = mock_v1
-        mock_client.V1Secret = MagicMock(return_value=MagicMock())
-        mock_client.V1ObjectMeta = MagicMock(return_value=MagicMock())
-        _install_sops_secret({"clusters": []}, "PRIV_KEY")
-
-    mock_v1.create_namespaced_secret.assert_called_once()
-
-
-def test_install_sops_secret_uses_load_kube_config_from_dict():
-    """Must use load_kube_config_from_dict (in-memory), not load_kube_config (local context)."""
-    mock_v1 = MagicMock()
-    with patch("gitopsgui.services.sops_service.SKIP_K8S", False), \
-         patch("gitopsgui.services.sops_service.config") as mock_cfg, \
-         patch("gitopsgui.services.sops_service.client") as mock_client:
-        mock_client.CoreV1Api.return_value = mock_v1
-        mock_client.V1Secret = MagicMock(return_value=MagicMock())
-        mock_client.V1ObjectMeta = MagicMock(return_value=MagicMock())
-        kubeconfig = {"clusters": [{"name": "test"}]}
-        _install_sops_secret(kubeconfig, "PRIV_KEY")
-
-    mock_cfg.load_kube_config_from_dict.assert_called_once_with(kubeconfig)
+    mock_cfg.load_incluster_config.assert_not_called()
     mock_cfg.load_kube_config.assert_not_called()
 
 
+def test_install_sops_secret_creates_secret_in_gitopsapi_namespace():
+    """Secret is created in gitopsapi namespace with name sops-age-{cluster_name}."""
+    from kubernetes import config as real_config
+    mock_v1 = MagicMock()
+    with patch("gitopsgui.services.sops_service.SKIP_K8S", False), \
+         patch("gitopsgui.services.sops_service.config.load_incluster_config",
+               side_effect=real_config.ConfigException("not in cluster")), \
+         patch("gitopsgui.services.sops_service.config.load_kube_config"), \
+         patch("gitopsgui.services.sops_service.client") as mock_client:
+        mock_client.CoreV1Api.return_value = mock_v1
+        mock_client.V1Secret = MagicMock(return_value=MagicMock())
+        mock_client.V1ObjectMeta = MagicMock(return_value=MagicMock())
+        _install_sops_secret("gitopsdev", "PRIV_KEY")
+
+    mock_v1.create_namespaced_secret.assert_called_once()
+    call_args = mock_v1.create_namespaced_secret.call_args
+    assert call_args.args[0] == "gitopsapi"
+
+
+def test_install_sops_secret_uses_incluster_config_when_available():
+    """Tries load_incluster_config first (in-cluster path)."""
+    mock_v1 = MagicMock()
+    with patch("gitopsgui.services.sops_service.SKIP_K8S", False), \
+         patch("gitopsgui.services.sops_service.config.load_incluster_config") as mock_in, \
+         patch("gitopsgui.services.sops_service.config.load_kube_config") as mock_kube, \
+         patch("gitopsgui.services.sops_service.client") as mock_client:
+        mock_in.return_value = None  # success
+        mock_client.CoreV1Api.return_value = mock_v1
+        mock_client.V1Secret = MagicMock(return_value=MagicMock())
+        mock_client.V1ObjectMeta = MagicMock(return_value=MagicMock())
+        _install_sops_secret("gitopsdev", "PRIV_KEY")
+
+    mock_in.assert_called_once()
+    mock_kube.assert_not_called()
+
+
 def test_install_sops_secret_upserts_on_409():
+    from kubernetes import config as real_config
     from kubernetes.client.exceptions import ApiException
     mock_v1 = MagicMock()
     mock_v1.create_namespaced_secret.side_effect = ApiException(status=409)
     with patch("gitopsgui.services.sops_service.SKIP_K8S", False), \
-         patch("gitopsgui.services.sops_service.config"), \
+         patch("gitopsgui.services.sops_service.config.load_incluster_config",
+               side_effect=real_config.ConfigException("not in cluster")), \
+         patch("gitopsgui.services.sops_service.config.load_kube_config"), \
          patch("gitopsgui.services.sops_service.client") as mock_client:
         mock_client.CoreV1Api.return_value = mock_v1
         mock_client.V1Secret = MagicMock(return_value=MagicMock())
         mock_client.V1ObjectMeta = MagicMock(return_value=MagicMock())
-        _install_sops_secret({"clusters": []}, "PRIV_KEY")
+        _install_sops_secret("gitopsdev", "PRIV_KEY")
 
     mock_v1.replace_namespaced_secret.assert_called_once()
 

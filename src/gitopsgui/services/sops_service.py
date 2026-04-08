@@ -99,26 +99,38 @@ def _encrypt_with_management_key(private_key: str, mgmt_public_key: str) -> str:
     return result.stdout
 
 
-def _install_sops_secret(kubeconfig_dict: dict, private_key: str) -> None:
-    """Upsert sops-age Secret in flux-system namespace of the target cluster.
+def _install_sops_secret(cluster_name: str, private_key: str) -> None:
+    """Upsert sops-age-{cluster_name} Secret in the management cluster gitopsapi namespace.
 
-    Uses an in-memory kubeconfig dict (extracted from CAPI management cluster secret)
-    so this works when gitopsapi is running in-cluster with no local ~/.kube/config.
-    Pass an empty dict when SKIP_K8S=1 (the function returns immediately).
+    Stores the SOPS private key on the management cluster so create_cluster() can
+    read it back and embed it as an InlineManifest (Option B — management cluster storage).
+    Pass an empty cluster_name string when SKIP_K8S=1 (the function returns immediately).
     """
     if SKIP_K8S:
         return
-    config.load_kube_config_from_dict(kubeconfig_dict)
-    v1 = client.CoreV1Api()
+    try:
+        config.load_incluster_config()
+    except config.ConfigException:
+        config.load_kube_config()
+    core_api = client.CoreV1Api()
+    secret_name = f"sops-age-{cluster_name}"
     secret = client.V1Secret(
-        metadata=client.V1ObjectMeta(name="sops-age", namespace="flux-system"),
+        metadata=client.V1ObjectMeta(
+            name=secret_name,
+            namespace="gitopsapi",
+            labels={
+                "app.kubernetes.io/managed-by": "gitopsapi",
+                "gitopsapi.podzone.net/cluster": cluster_name,
+            },
+        ),
+        type="Opaque",
         string_data={"age.agekey": private_key},
     )
     try:
-        v1.create_namespaced_secret("flux-system", secret)
-    except ApiException as exc:
-        if exc.status == 409:
-            v1.replace_namespaced_secret("sops-age", "flux-system", secret)
+        core_api.create_namespaced_secret("gitopsapi", secret)
+    except ApiException as e:
+        if e.status == 409:  # already exists — update
+            core_api.replace_namespaced_secret(secret_name, "gitopsapi", secret)
         else:
             raise
 
@@ -223,21 +235,10 @@ class SOPSService:
             reviewers=[],
         )
 
-        # 5. Install SOPS private key as sops-age Secret in target cluster.
-        #    Kubeconfig is fetched in-memory from the CAPI management cluster secret
-        #    (no local ~/.kube/config required — works when running in-cluster).
-        if not SKIP_K8S:
-            from .kubeconfig_service import KubeconfigService, rewrite_kubeconfig_server
-            from .cluster_service import ClusterService
-            kubeconfig_yaml = await KubeconfigService().extract_kubeconfig(cluster_name)
-            cluster_info = await ClusterService().get_cluster(cluster_name)
-            if cluster_info and cluster_info.spec.bastion:
-                b = cluster_info.spec.bastion
-                kubeconfig_yaml = rewrite_kubeconfig_server(
-                    kubeconfig_yaml, b.ip, b.api_port
-                )
-            kubeconfig_dict = yaml.safe_load(kubeconfig_yaml)
-            await asyncio.to_thread(_install_sops_secret, kubeconfig_dict, sops_key.private_key)
+        # 5. Store SOPS private key in management cluster (gitopsapi namespace).
+        #    Secret name: sops-age-{cluster_name}. create_cluster() reads this back
+        #    and embeds the key as an InlineManifest (Option B — management cluster storage).
+        await asyncio.to_thread(_install_sops_secret, cluster_name, sops_key.private_key)
 
         # 6. Write .sops.yaml to {cluster}-infra repo
         sops_yaml = _SOPS_YAML_TEMPLATE.format(public_key=sops_key.public_key)
