@@ -1682,3 +1682,229 @@ async def test_create_cluster_static_inline_manifests_in_values():
     assert "kubelet-serving-cert-approver" in names
     assert "metrics-server" in names
     assert "gateway-api" in names
+
+
+# ---------------------------------------------------------------------------
+# CC-178: NetworkSpec — _render_values, classify_cluster_changes, get_cluster
+# ---------------------------------------------------------------------------
+
+from gitopsgui.models.cluster import NetworkSpec
+
+
+def _make_spec_with_network(type="flannel", vip="192.168.1.100", ip_range="192.168.1.0/24",
+                             cert_sans=None, **kwargs):
+    """Build a ClusterSpec with an explicit NetworkSpec (bypasses migration validator)."""
+    n = NetworkSpec(
+        id="test-net-id",
+        type=type,
+        vip=vip,
+        ip_range=ip_range,
+        cert_sans=cert_sans,
+        **kwargs,
+    )
+    return ClusterSpec(
+        name="test-cluster",
+        network=n,
+        dimensions=ClusterDimensions(control_plane_count=1, worker_count=1),
+        managed_gitops=False,
+        gitops_repo_url="https://github.com/test/repo",
+        sops_secret_ref="sops-key",
+    )
+
+
+def test_render_values_network_vip_written():
+    """_render_values writes vip from spec.network.vip when network is present."""
+    import yaml
+    spec = _make_spec_with_network(vip="10.99.0.1")
+    parsed = yaml.safe_load(_render_values(spec))
+    assert parsed["vip"] == "10.99.0.1"
+
+
+def test_render_values_network_ip_ranges_written():
+    """_render_values writes network.ip_ranges from spec.network.ip_range."""
+    import yaml
+    spec = _make_spec_with_network(ip_range="10.99.0.0/24")
+    parsed = yaml.safe_load(_render_values(spec))
+    assert parsed["network"]["ip_ranges"] == ["10.99.0.0/24"]
+
+
+def test_render_values_network_endpoint_ip_written():
+    """_render_values writes network.endpoint_ip from spec.network.vip."""
+    import yaml
+    spec = _make_spec_with_network(vip="10.99.0.1")
+    parsed = yaml.safe_load(_render_values(spec))
+    assert parsed["network"]["endpoint_ip"] == "10.99.0.1"
+
+
+def test_render_values_cni_cilium_when_network_type_cilium():
+    """_render_values writes cni='cilium' when spec.network.type='cilium'."""
+    import yaml
+    spec = _make_spec_with_network(type="cilium")
+    parsed = yaml.safe_load(_render_values(spec))
+    assert parsed["cni"] == "cilium"
+
+
+def test_render_values_no_cni_when_network_type_flannel():
+    """_render_values does not write cni key when spec.network.type='flannel' and spec.cni is None."""
+    import yaml
+    spec = _make_spec_with_network(type="flannel")
+    parsed = yaml.safe_load(_render_values(spec))
+    assert "cni" not in parsed
+
+
+def test_render_values_proxy_disabled_not_set():
+    """_render_values never sets proxy.disabled — derived from cni=='cilium' in cluster-chart."""
+    import yaml
+    spec = _make_spec_with_network(type="cilium")
+    parsed = yaml.safe_load(_render_values(spec))
+    assert "proxy" not in parsed
+
+
+def test_render_values_network_cert_sans_written_when_set():
+    """_render_values writes network.certSANs from spec.network.cert_sans."""
+    import yaml
+    spec = _make_spec_with_network(cert_sans=["192.168.1.100", "k8s.example.com"])
+    parsed = yaml.safe_load(_render_values(spec))
+    assert parsed["network"]["certSANs"] == ["192.168.1.100", "k8s.example.com"]
+
+
+def test_render_values_network_cert_sans_omitted_when_none():
+    """_render_values does not write certSANs when spec.network.cert_sans is None."""
+    import yaml
+    spec = _make_spec_with_network(cert_sans=None)
+    parsed = yaml.safe_load(_render_values(spec))
+    assert "certSANs" not in parsed.get("network", {})
+
+
+def test_render_values_network_spec_roundtrip_block_written():
+    """_render_values writes 'network_spec' roundtrip block for get_cluster reconstruction."""
+    import yaml
+    spec = _make_spec_with_network(type="cilium", vip="10.0.0.5", ip_range="10.0.0.0/24")
+    parsed = yaml.safe_load(_render_values(spec))
+    assert "network_spec" in parsed
+    assert parsed["network_spec"]["type"] == "cilium"
+    assert parsed["network_spec"]["vip"] == "10.0.0.5"
+    assert parsed["network_spec"]["ip_range"] == "10.0.0.0/24"
+
+
+def test_classify_network_type_change_is_prohibited():
+    """Changing network.type (CNI) is Cat 4 — cluster reprovisioning required."""
+    base = _make_spec_with_network(type="flannel")
+    new = _make_spec_with_network(type="cilium")
+    result = classify_cluster_changes(base, new)
+    assert result.category == ChangeCategory.PROHIBITED
+    assert "network.type" in result.changed_fields
+
+
+def test_classify_network_vip_change_is_prohibited():
+    """Changing network.vip is Cat 4."""
+    base = _make_spec_with_network(vip="10.0.0.1")
+    new = _make_spec_with_network(vip="10.0.0.2")
+    result = classify_cluster_changes(base, new)
+    assert result.category == ChangeCategory.PROHIBITED
+    assert "network.vip" in result.changed_fields
+
+
+def test_classify_network_ip_range_change_is_prohibited():
+    """Changing network.ip_range is Cat 4."""
+    base = _make_spec_with_network(ip_range="10.0.0.0/24")
+    new = _make_spec_with_network(ip_range="10.0.1.0/24")
+    result = classify_cluster_changes(base, new)
+    assert result.category == ChangeCategory.PROHIBITED
+    assert "network.ip_range" in result.changed_fields
+
+
+def test_classify_network_cilium_version_change_is_cat1():
+    """Changing network.cilium_version is Cat 1 (new InlineManifest → new MachineTemplate)."""
+    base = _make_spec_with_network(cilium_version="1.17.4")
+    new = _make_spec_with_network(cilium_version="1.18.0")
+    result = classify_cluster_changes(base, new)
+    assert result.category == ChangeCategory.IMMUTABLE_TEMPLATE
+    assert "network.cilium_version" in result.changed_fields
+
+
+def test_classify_network_capability_flag_change_is_cat1():
+    """Changing any Cilium capability flag is Cat 1."""
+    base = _make_spec_with_network(hubble_relay=False)
+    new = _make_spec_with_network(hubble_relay=True)
+    result = classify_cluster_changes(base, new)
+    assert result.category == ChangeCategory.IMMUTABLE_TEMPLATE
+    assert "network.hubble_relay" in result.changed_fields
+
+
+def test_classify_network_gateway_api_alpn_change_is_cat1():
+    """gateway_api_alpn flag change is Cat 1."""
+    base = _make_spec_with_network(gateway_api_alpn=False)
+    new = _make_spec_with_network(gateway_api_alpn=True)
+    result = classify_cluster_changes(base, new)
+    assert result.category == ChangeCategory.IMMUTABLE_TEMPLATE
+    assert "network.gateway_api_alpn" in result.changed_fields
+
+
+@pytest.mark.asyncio
+async def test_get_cluster_reconstructs_network_spec_from_roundtrip():
+    """get_cluster reads 'network_spec' block from values and reconstructs NetworkSpec."""
+    import yaml as _yaml
+    raw = _yaml.dump({
+        "cluster": {"name": "test-cluster"},
+        "network": {"ip_ranges": ["10.0.0.0/24"], "endpoint_ip": "10.0.0.1"},
+        "vip": "10.0.0.1",
+        "sops_secret_ref": "sops-key",
+        "dimensions": {"control_plane_count": 1, "worker_count": 1,
+                       "cpu_per_node": 4, "memory_gb_per_node": 8, "boot_volume_gb": 50},
+        "network_spec": {
+            "id": "fixed-net-id",
+            "type": "cilium",
+            "vip": "10.0.0.1",
+            "ip_range": "10.0.0.0/24",
+            "cilium_version": "1.17.4",
+            "kube_proxy_replacement": True,
+            "ingress_controller": True,
+            "ingress_controller_lb_mode": "shared",
+            "ingress_controller_default": True,
+            "l2_load_balancer": True,
+            "l2_lease_duration": "3s",
+            "l2_lease_renew_deadline": "1s",
+            "l2_lease_retry_period": "200ms",
+            "l7_proxy": True,
+            "gateway_api": True,
+            "gateway_api_alpn": False,
+            "gateway_api_app_protocol": False,
+            "hubble_relay": False,
+            "hubble_ui": False,
+        },
+    })
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.read_file = AsyncMock(return_value=raw)
+    result = await svc.get_cluster("test-cluster")
+    assert result is not None
+    assert result.spec.network is not None
+    assert result.spec.network.id == "fixed-net-id"
+    assert result.spec.network.type == "cilium"
+    assert result.spec.network.vip == "10.0.0.1"
+    assert result.spec.network.ip_range == "10.0.0.0/24"
+
+
+@pytest.mark.asyncio
+async def test_get_cluster_derives_network_from_values_when_no_roundtrip():
+    """get_cluster derives NetworkSpec from cluster-chart keys when network_spec is absent."""
+    import yaml as _yaml
+    raw = _yaml.dump({
+        "cluster": {"name": "test-cluster"},
+        "network": {"ip_ranges": ["192.168.1.0/24"]},
+        "vip": "192.168.1.1",
+        "cni": "cilium",
+        "sops_secret_ref": "sops-key",
+        "dimensions": {"control_plane_count": 1, "worker_count": 1,
+                       "cpu_per_node": 4, "memory_gb_per_node": 8, "boot_volume_gb": 50},
+    })
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.read_file = AsyncMock(return_value=raw)
+    result = await svc.get_cluster("test-cluster")
+    assert result is not None
+    assert result.spec.network is not None
+    assert result.spec.network.vip == "192.168.1.1"
+    assert result.spec.network.ip_range == "192.168.1.0/24"
+    assert result.spec.network.type == "cilium"

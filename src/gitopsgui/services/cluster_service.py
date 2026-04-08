@@ -26,7 +26,7 @@ from ..models.cluster import (
     ClusterSuspendResponse, ClusterDecommissionResponse,
     IngressConnectorSpec, IngressConnectorResponse,
     StorageClassesResponse, GatewayWireResponse,
-    PlatformSpec, StorageSpec, ClusterChartSpec,
+    PlatformSpec, StorageSpec, ClusterChartSpec, NetworkSpec,
 )
 from ..models.deploy_key import ClusterBootstrapRequest, ClusterBootstrapResponse
 from .git_service import GitService
@@ -183,13 +183,28 @@ def classify_cluster_changes(existing: "ClusterSpec", new: "ClusterSpec") -> Cha
     if (existing.platform and new.platform) and existing.platform.type != new.platform.type:
         changed.append("platform.type")
         category = ChangeCategory.PROHIBITED
-    # CC-177: cni and cert_sans are immutable at provision time
+    # CC-177: cni and cert_sans are immutable at provision time (legacy fields — not removed yet)
     if existing.cni != new.cni:
         changed.append("cni")
         category = ChangeCategory.PROHIBITED
     if existing.cert_sans != new.cert_sans:
         changed.append("cert_sans")
         category = ChangeCategory.PROHIBITED
+
+    # CC-178: NetworkSpec Cat 4 checks — parallel to legacy field checks above
+    if existing.network and new.network:
+        if existing.network.type != new.network.type:
+            changed.append("network.type")      # Cat 4
+            category = ChangeCategory.PROHIBITED
+        if existing.network.vip != new.network.vip:
+            changed.append("network.vip")       # Cat 4
+            category = ChangeCategory.PROHIBITED
+        if existing.network.ip_range != new.network.ip_range:
+            changed.append("network.ip_range")  # Cat 4
+            category = ChangeCategory.PROHIBITED
+        if existing.network.cert_sans != new.network.cert_sans:
+            changed.append("network.cert_sans") # Cat 4
+            category = ChangeCategory.PROHIBITED
 
     if category == ChangeCategory.PROHIBITED:
         return ChangeClassification(category=category, changed_fields=changed)
@@ -226,6 +241,20 @@ def classify_cluster_changes(existing: "ClusterSpec", new: "ClusterSpec") -> Cha
         immutable_changes.append("storage.linstor_disk_gb")
     if (old_s.emptydir_gb if old_s else 0) != (new_s.emptydir_gb if new_s else 0):
         immutable_changes.append("storage.emptydir_gb")
+
+    # CC-178: NetworkSpec Cat 1 checks — Cilium version + capability flags.
+    # All changes trigger a new InlineManifest → new MachineTemplate → rolling replacement.
+    if existing.network and new.network:
+        if existing.network.cilium_version != new.network.cilium_version:
+            immutable_changes.append("network.cilium_version")
+        _cilium_flags = [
+            "kube_proxy_replacement", "ingress_controller", "l2_load_balancer",
+            "l7_proxy", "gateway_api", "gateway_api_alpn", "gateway_api_app_protocol",
+            "hubble_relay", "hubble_ui",
+        ]
+        for flag in _cilium_flags:
+            if getattr(existing.network, flag) != getattr(new.network, flag):
+                immutable_changes.append(f"network.{flag}")
 
     if immutable_changes:
         changed.extend(immutable_changes)
@@ -323,12 +352,22 @@ def _render_values(
       are T-035 scope and must NOT be passed here.
     """
     cp_dims = spec.controlplane_dimensions or spec.dimensions
+
+    # Resolve effective VIP and ip_range from NetworkSpec (preferred) or legacy fields (fallback).
+    # CC-178: spec.network supersedes the legacy top-level vip/ip_range fields.
+    if spec.network:
+        _effective_vip = spec.network.vip
+        _effective_ip_range = spec.network.ip_range
+    else:
+        _effective_vip = spec.vip or ""
+        _effective_ip_range = spec.ip_range or ""
+
     # cluster-chart consumed fields
     data: dict = {
         "cluster": {"name": spec.name},
-        "network": {"ip_ranges": [spec.ip_range]},
+        "network": {"ip_ranges": [_effective_ip_range]},
         "controlplane": {
-            "endpoint_ip": spec.vip,
+            "endpoint_ip": _effective_vip,
             "machine_count": cp_dims.control_plane_count,
             "num_cores": cp_dims.cpu_per_node,
             "num_sockets": 1,
@@ -395,7 +434,7 @@ def _render_values(
                 "s3_endpoint": spec.platform.capabilities.s3_endpoint,
             },
         }
-    data["vip"] = spec.vip
+    data["vip"] = _effective_vip
     if spec.gitops_repo_url:
         data["gitops_repo_url"] = spec.gitops_repo_url
     data["sops_secret_ref"] = spec.sops_secret_ref
@@ -448,16 +487,62 @@ def _render_values(
             "type": spec.cluster_chart.type,
         }
 
-    # CC-177: cluster-chart gap closure — write values keys for ETE provisioning
+    # CC-178: NetworkSpec — network capability fields (preferred path).
+    # When spec.network is present, read CNI type and certSANs from it.
+    # The legacy fallback (spec.cni, spec.cert_sans) applies for values files
+    # that have not yet been migrated to the NetworkSpec format.
+    if spec.network:
+        n = spec.network
+        # endpoint_ip and ip_ranges already written above via _effective_vip/_effective_ip_range
+        data.setdefault("network", {})["endpoint_ip"] = n.vip
+        if n.cert_sans:
+            data.setdefault("network", {})["certSANs"] = n.cert_sans
+        if n.type == "cilium":
+            data["cni"] = "cilium"
+            # proxy.disabled is derived from cni=="cilium" in the cluster-chart template; not set here.
+        # Write NetworkSpec as roundtrip metadata so get_cluster can reconstruct it.
+        data["network_spec"] = {
+            "id": n.id,
+            "type": n.type,
+            "vip": n.vip,
+            "ip_range": n.ip_range,
+            "lb_pool_start": n.lb_pool_start,
+            "lb_pool_stop": n.lb_pool_stop,
+            "cert_sans": n.cert_sans,
+            "dns_domain": n.dns_domain,
+            "pod_cidr": n.pod_cidr,
+            "service_cidr": n.service_cidr,
+            "cilium_version": n.cilium_version,
+            "kube_proxy_replacement": n.kube_proxy_replacement,
+            "ingress_controller": n.ingress_controller,
+            "ingress_controller_lb_mode": n.ingress_controller_lb_mode,
+            "ingress_controller_default": n.ingress_controller_default,
+            "l2_load_balancer": n.l2_load_balancer,
+            "l2_lease_duration": n.l2_lease_duration,
+            "l2_lease_renew_deadline": n.l2_lease_renew_deadline,
+            "l2_lease_retry_period": n.l2_lease_retry_period,
+            "l7_proxy": n.l7_proxy,
+            "gateway_api": n.gateway_api,
+            "gateway_api_alpn": n.gateway_api_alpn,
+            "gateway_api_app_protocol": n.gateway_api_app_protocol,
+            "hubble_relay": n.hubble_relay,
+            "hubble_ui": n.hubble_ui,
+        }
+    # CC-177: legacy cni and cert_sans fields — always written when explicitly set.
+    # These apply even when spec.network is present, because model_copy() does not re-run
+    # validators so spec.cni and spec.cert_sans may differ from network.type / network.cert_sans.
+    # spec.cni / spec.cert_sans act as explicit overrides that take precedence.
     if spec.cni is not None:
         data["cni"] = spec.cni
+    if spec.cert_sans:
+        data.setdefault("network", {})["certSANs"] = spec.cert_sans
+
+    # CC-177: remaining cluster-chart gap fields (machine, talos_version)
     if spec.machine_install_disk:
         data.setdefault("machine", {})["installDisk"] = spec.machine_install_disk
     if spec.talos_version:
         data.setdefault("cluster", {})["talos_version"] = spec.talos_version
         data["talos_version"] = spec.talos_version  # roundtrip metadata
-    if spec.cert_sans:
-        data.setdefault("network", {})["certSANs"] = spec.cert_sans
 
     # T-036 (CC-176) — InlineManifests: written when provided by the caller.
     # The caller fetches manifests before calling _render_values and passes them in.
@@ -1038,6 +1123,33 @@ class ClusterService:
         raw_cluster_chart = data.get("cluster_chart")
         cluster_chart = ClusterChartSpec(**raw_cluster_chart) if isinstance(raw_cluster_chart, dict) else None
 
+        # CC-178: reconstruct NetworkSpec.
+        # Preferred: use the 'network_spec' roundtrip block written by _render_values.
+        # Fallback: derive from cluster-chart values keys (ip_ranges, endpoint_ip, cni, certSANs).
+        raw_network_spec = data.get("network_spec")
+        if isinstance(raw_network_spec, dict):
+            network = NetworkSpec(**raw_network_spec)
+        else:
+            # Derive from cluster-chart values (backward compat for values files pre-CC-178)
+            raw_net = data.get("network", {})
+            _ip_ranges = raw_net.get("ip_ranges", [""])
+            _ip_range = _ip_ranges[0] if _ip_ranges else ""
+            _vip = data.get("vip", "")
+            _cni_str = data.get("cni", "")
+            _cni_type = "cilium" if _cni_str == "cilium" else "flannel"
+            _cert_sans = raw_net.get("certSANs")
+            if _vip or _ip_range:
+                from uuid import uuid4
+                network = NetworkSpec(
+                    id=str(uuid4()),
+                    type=_cni_type,
+                    vip=_vip,
+                    ip_range=_ip_range,
+                    cert_sans=_cert_sans,
+                )
+            else:
+                network = None
+
         # T-033 (CC-173) — InlineManifest redaction on read.
         # The values file in git may contain 'inlineManifests' with full manifest contents
         # (kubelet-serving-cert-approver, metrics-server, gateway-api from T-036, and
@@ -1066,6 +1178,7 @@ class ClusterService:
             storage=storage,
             cluster_chart=cluster_chart,
             inline_manifest_names=inline_names,
+            network=network,
         )
         return ClusterResponse(name=name, spec=spec)
 
