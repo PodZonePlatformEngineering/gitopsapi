@@ -28,6 +28,11 @@ async def lifespan(app: FastAPI):
         git = GitService()
         await git.init()
 
+    # T-039 (CC-179): ensure cilium helm repo is added/updated at startup.
+    # Failure is non-fatal — logged as warning; will fail at provision time instead.
+    from ..services.cluster_service import _ensure_cilium_helm_repo
+    _ensure_cilium_helm_repo()
+
     _ready = True
     yield
     _ready = False
