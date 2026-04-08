@@ -3,18 +3,23 @@ Unit tests for ClusterService — mocks GitService and GitHubService.
 """
 
 import pytest
+import httpx
+import yaml as _yaml
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from gitopsgui.models.cluster import (
     ClusterSpec, ClusterDimensions, PlatformSpec, TalosTemplateSpec,
-    IngressConnectorSpec, TokenSecretRef, ClusterChartSpec,
+    IngressConnectorSpec, TokenSecretRef, ClusterChartSpec, StorageSpec,
 )
 from gitopsgui.services.cluster_service import (
     ClusterService, _render_values, _render_kustomization, _render_cluster_yaml,
     _set_kustomization_suspended, _remove_kustomization,
     _render_cloudflared_yaml, _render_cloudflared_apps_kustomization,
     _render_cloudflared_flux_kustomization,
+    _render_piraeus_kustomization,
+    fetch_static_inline_manifests, GATEWAY_API_VERSION,
     classify_cluster_changes, ChangeCategory, _dims_hash,
+    _STATIC_INLINE_MANIFESTS, _PIRAEUS_INFRA_PATH,
 )
 
 
@@ -1370,3 +1375,310 @@ def test_classify_cert_sans_none_to_set_is_prohibited():
     result = classify_cluster_changes(base, new)
     assert result.category == ChangeCategory.PROHIBITED
     assert "cert_sans" in result.changed_fields
+
+
+# ---------------------------------------------------------------------------
+# T-036 (CC-176) — fetch_static_inline_manifests
+# ---------------------------------------------------------------------------
+
+_FAKE_MANIFEST_CONTENT = "# fake manifest\napiVersion: v1\nkind: Namespace\n"
+
+
+def _make_mock_response(text: str, status_code: int = 200):
+    """Build a minimal httpx.Response-like mock."""
+    mock = MagicMock(spec=httpx.Response)
+    mock.status_code = status_code
+    mock.text = text
+    if status_code >= 400:
+        mock.raise_for_status.side_effect = httpx.HTTPStatusError(
+            f"HTTP {status_code}",
+            request=MagicMock(url="https://example.com/manifest.yaml"),
+            response=mock,
+        )
+    else:
+        mock.raise_for_status.return_value = None
+    return mock
+
+
+def test_fetch_static_inline_manifests_returns_all_three():
+    """All three manifests returned with correct names and non-empty contents."""
+    with patch("gitopsgui.services.cluster_service.httpx.get") as mock_get:
+        mock_get.return_value = _make_mock_response(_FAKE_MANIFEST_CONTENT)
+        result = fetch_static_inline_manifests()
+    assert len(result) == 3
+    names = [m["name"] for m in result]
+    assert "kubelet-serving-cert-approver" in names
+    assert "metrics-server" in names
+    assert "gateway-api" in names
+
+
+def test_fetch_static_inline_manifests_contents_populated():
+    """Each returned entry has non-empty 'contents'."""
+    with patch("gitopsgui.services.cluster_service.httpx.get") as mock_get:
+        mock_get.return_value = _make_mock_response(_FAKE_MANIFEST_CONTENT)
+        result = fetch_static_inline_manifests()
+    for m in result:
+        assert "contents" in m
+        assert m["contents"] == _FAKE_MANIFEST_CONTENT
+
+
+def test_fetch_static_inline_manifests_raises_on_404():
+    """HTTP 404 on any manifest raises httpx.HTTPStatusError — halts provisioning."""
+    with patch("gitopsgui.services.cluster_service.httpx.get") as mock_get:
+        mock_get.return_value = _make_mock_response("", status_code=404)
+        with pytest.raises(httpx.HTTPStatusError):
+            fetch_static_inline_manifests()
+
+
+def test_fetch_static_inline_manifests_follows_redirects():
+    """httpx.get is called with follow_redirects=True and a timeout."""
+    with patch("gitopsgui.services.cluster_service.httpx.get") as mock_get:
+        mock_get.return_value = _make_mock_response(_FAKE_MANIFEST_CONTENT)
+        fetch_static_inline_manifests()
+    for call in mock_get.call_args_list:
+        assert call.kwargs.get("follow_redirects") is True
+        assert call.kwargs.get("timeout") is not None
+
+
+def test_gateway_api_version_pin():
+    """The gateway-api URL contains the pinned version constant, not 'latest'."""
+    gateway_entry = next(m for m in _STATIC_INLINE_MANIFESTS if m["name"] == "gateway-api")
+    assert GATEWAY_API_VERSION in gateway_entry["url"]
+    assert "latest" not in gateway_entry["url"].lower()
+
+
+def test_render_values_includes_inline_manifests_when_provided():
+    """When inline_manifests passed, 'inlineManifests' key appears in rendered values."""
+    manifests = [
+        {"name": "kubelet-serving-cert-approver", "contents": "# manifest"},
+        {"name": "metrics-server", "contents": "# manifest"},
+        {"name": "gateway-api", "contents": "# manifest"},
+    ]
+    out = _render_values(_SPEC, inline_manifests=manifests)
+    parsed = _yaml.safe_load(out)
+    assert "inlineManifests" in parsed
+    assert len(parsed["inlineManifests"]) == 3
+    names = [m["name"] for m in parsed["inlineManifests"]]
+    assert "kubelet-serving-cert-approver" in names
+    assert "metrics-server" in names
+    assert "gateway-api" in names
+
+
+def test_render_values_no_inline_manifests_when_not_provided():
+    """When inline_manifests not passed, 'inlineManifests' key absent from rendered values."""
+    out = _render_values(_SPEC)
+    parsed = _yaml.safe_load(out)
+    assert "inlineManifests" not in parsed
+
+
+def test_render_values_empty_inline_manifests_written():
+    """Passing empty list writes inlineManifests: [] to values (valid cluster-chart value)."""
+    out = _render_values(_SPEC, inline_manifests=[])
+    parsed = _yaml.safe_load(out)
+    assert "inlineManifests" in parsed
+    assert parsed["inlineManifests"] == []
+
+
+# ---------------------------------------------------------------------------
+# T-033 (CC-173) — InlineManifest redaction on read
+# ---------------------------------------------------------------------------
+
+async def test_get_cluster_does_not_expose_inline_manifest_contents():
+    """GET /clusters/{name} must not return inlineManifest contents — only names."""
+    import yaml
+    values_with_inline = yaml.dump({
+        "cluster": {"name": "test-cluster"},
+        "network": {"ip_ranges": ["192.168.1.0/24"]},
+        "controlplane": {"machine_count": 1},
+        "worker": {"machine_count": 1},
+        "dimensions": {
+            "control_plane_count": 1,
+            "worker_count": 1,
+            "cpu_per_node": 4,
+            "memory_gb_per_node": 8,
+            "boot_volume_gb": 50,
+        },
+        "vip": "192.168.1.100",
+        "sops_secret_ref": "sops-key",
+        "inlineManifests": [
+            {"name": "kubelet-serving-cert-approver", "contents": "---\napiVersion: v1\n# SENSITIVE"},
+            {"name": "sops-age", "contents": "---\napiVersion: v1\nstringData:\n  age.agekey: AGE-SECRET-KEY-1..."},
+        ],
+    })
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.read_file = AsyncMock(return_value=values_with_inline)
+
+    result = await svc.get_cluster("test-cluster")
+
+    assert result is not None
+    # Contents must not be exposed — only names surfaced via inline_manifest_names
+    assert "AGE-SECRET-KEY" not in str(result)
+    assert "SENSITIVE" not in str(result)
+    # Names should be surfaced
+    assert "kubelet-serving-cert-approver" in result.spec.inline_manifest_names
+    assert "sops-age" in result.spec.inline_manifest_names
+
+
+def test_cluster_spec_inline_manifest_names_defaults_empty():
+    """inline_manifest_names defaults to empty list — backward compatible with existing specs."""
+    spec = ClusterSpec(
+        name="test",
+        vip="10.0.0.1",
+        ip_range="10.0.0.2-10.0.0.5",
+        dimensions=ClusterDimensions(),
+        sops_secret_ref="key",
+    )
+    assert spec.inline_manifest_names == []
+
+
+# ---------------------------------------------------------------------------
+# T-034 (CC-174) — piraeus-operator kustomization
+# ---------------------------------------------------------------------------
+
+def test_render_piraeus_kustomization_contains_kustomization_cr():
+    """Rendered manifest includes a Flux Kustomization CR."""
+    out = _render_piraeus_kustomization("mycluster")
+    assert "kind: Kustomization" in out
+    assert "name: piraeus-operator" in out
+
+
+def test_render_piraeus_kustomization_contains_gitrepository_cr():
+    """Rendered manifest includes a Flux GitRepository CR."""
+    out = _render_piraeus_kustomization("mycluster")
+    assert "kind: GitRepository" in out
+    assert "piraeusdatastore/piraeus-operator" in out
+
+
+def test_render_piraeus_kustomization_flux_system_namespace():
+    """Both resources are in flux-system namespace."""
+    out = _render_piraeus_kustomization("mycluster")
+    assert out.count("namespace: flux-system") == 2
+
+
+async def test_create_cluster_generates_piraeus_when_linstor_true():
+    """create_cluster writes piraeus kustomization to {cluster}-infra when storage.internal_linstor=True."""
+    spec_with_linstor = _SPEC.model_copy(update={
+        "storage": StorageSpec(internal_linstor=True),
+    })
+
+    infra_git_mock = AsyncMock()
+    infra_git_mock.create_branch = AsyncMock()
+    infra_git_mock.write_file = AsyncMock()
+    infra_git_mock.commit = AsyncMock(return_value="sha")
+    infra_git_mock.push = AsyncMock()
+
+    infra_gh_mock = AsyncMock()
+    infra_gh_mock.create_pr = AsyncMock(return_value="https://github.com/test/infra-pr/1")
+
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.create_branch = AsyncMock()
+    svc._git.write_file = AsyncMock()
+    svc._git.commit = AsyncMock(return_value="sha")
+    svc._git.push = AsyncMock()
+    svc._gh = AsyncMock()
+    svc._gh.create_pr = AsyncMock(return_value="https://github.com/test/repo/pull/1")
+
+    with patch("gitopsgui.services.cluster_service.fetch_static_inline_manifests") as mock_fetch, \
+         patch("gitopsgui.services.cluster_service.repo_router.git_for_infra", return_value=infra_git_mock), \
+         patch("gitopsgui.services.cluster_service.repo_router.github_for_infra", return_value=infra_gh_mock):
+        mock_fetch.return_value = []
+        result = await svc.create_cluster(spec_with_linstor)
+
+    # piraeus kustomization written to infra repo
+    infra_git_mock.write_file.assert_called_once()
+    written_path, written_content = infra_git_mock.write_file.call_args.args
+    assert _PIRAEUS_INFRA_PATH in written_path
+    assert "piraeus-operator.yaml" in written_path
+    assert "kind: Kustomization" in written_content
+    assert "piraeusdatastore" in written_content
+
+    # PR opened on infra repo
+    infra_gh_mock.create_pr.assert_called_once()
+    assert result.pr_url is not None
+
+
+async def test_create_cluster_no_piraeus_when_linstor_false():
+    """create_cluster does NOT write piraeus kustomization when storage.internal_linstor=False."""
+    spec_no_linstor = _SPEC.model_copy(update={
+        "storage": StorageSpec(internal_linstor=False),
+    })
+
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.create_branch = AsyncMock()
+    svc._git.write_file = AsyncMock()
+    svc._git.commit = AsyncMock(return_value="sha")
+    svc._git.push = AsyncMock()
+    svc._gh = AsyncMock()
+    svc._gh.create_pr = AsyncMock(return_value="https://github.com/test/repo/pull/1")
+
+    with patch("gitopsgui.services.cluster_service.fetch_static_inline_manifests") as mock_fetch, \
+         patch("gitopsgui.services.cluster_service.repo_router") as mock_router:
+        mock_fetch.return_value = []
+        result = await svc.create_cluster(spec_no_linstor)
+
+    # repo_router infra methods NOT called (no piraeus branch)
+    mock_router.git_for_infra.assert_not_called()
+    mock_router.github_for_infra.assert_not_called()
+    assert result.pr_url is not None
+
+
+async def test_create_cluster_no_piraeus_when_no_storage():
+    """create_cluster does NOT write piraeus kustomization when storage=None."""
+    spec_no_storage = _SPEC.model_copy(update={"storage": None})
+
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.create_branch = AsyncMock()
+    svc._git.write_file = AsyncMock()
+    svc._git.commit = AsyncMock(return_value="sha")
+    svc._git.push = AsyncMock()
+    svc._gh = AsyncMock()
+    svc._gh.create_pr = AsyncMock(return_value="https://github.com/test/repo/pull/1")
+
+    with patch("gitopsgui.services.cluster_service.fetch_static_inline_manifests") as mock_fetch, \
+         patch("gitopsgui.services.cluster_service.repo_router") as mock_router:
+        mock_fetch.return_value = []
+        result = await svc.create_cluster(spec_no_storage)
+
+    mock_router.git_for_infra.assert_not_called()
+    assert result.pr_url is not None
+
+
+async def test_create_cluster_static_inline_manifests_in_values():
+    """create_cluster writes inlineManifests from fetch_static_inline_manifests into the values file."""
+    fake_manifests = [
+        {"name": "kubelet-serving-cert-approver", "contents": "# ksa\n"},
+        {"name": "metrics-server", "contents": "# ms\n"},
+        {"name": "gateway-api", "contents": "# gw\n"},
+    ]
+
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.create_branch = AsyncMock()
+    svc._git.write_file = AsyncMock()
+    svc._git.commit = AsyncMock(return_value="sha")
+    svc._git.push = AsyncMock()
+    svc._gh = AsyncMock()
+    svc._gh.create_pr = AsyncMock(return_value="https://github.com/test/repo/pull/1")
+
+    with patch("gitopsgui.services.cluster_service.fetch_static_inline_manifests") as mock_fetch, \
+         patch("gitopsgui.services.cluster_service.repo_router"):
+        mock_fetch.return_value = fake_manifests
+        await svc.create_cluster(_SPEC)
+
+    # Find the values file write call
+    import yaml
+    values_call = next(
+        (c for c in svc._git.write_file.call_args_list if "values" in c.args[0]),
+        None,
+    )
+    assert values_call is not None
+    written_values = yaml.safe_load(values_call.args[1])
+    assert "inlineManifests" in written_values
+    names = [m["name"] for m in written_values["inlineManifests"]]
+    assert "kubelet-serving-cert-approver" in names
+    assert "metrics-server" in names
+    assert "gateway-api" in names

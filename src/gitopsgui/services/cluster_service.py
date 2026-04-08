@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from enum import IntEnum
 from typing import List, Optional
 
+import httpx
 import yaml
 
 from ..models.cluster import (
@@ -43,6 +44,70 @@ _MGMT_CLUSTERS_PATH = "clusters/management/clusters.yaml"
 # Reviewers determined by target (cluster changes always need cluster_operator approval)
 _CLUSTER_REVIEWERS: List[str] = []  # populated from env/config at runtime
 _CLUSTER_STAGE_LABEL = "stage:production"
+
+
+# ---------------------------------------------------------------------------
+# T-036 (CC-176) — Static InlineManifests
+# ---------------------------------------------------------------------------
+# These three manifests are fetched at cluster provision time and embedded as
+# inlineManifests in the cluster-chart values. They are not cluster-specific
+# (no templating required) and are required on every cluster.
+#
+# Why inlineManifests rather than extraManifests (URLs)?
+# InlineManifests do not require outbound network access at cluster boot. The
+# content is fetched here (where outbound access is available) and baked into
+# the CAPI MachineConfig. This removes external URL dependencies from the
+# cluster bootstrap path.
+
+# gateway-api is pinned to v1.3.0 (standard channel).
+# When gateway-api releases a new version, bump GATEWAY_API_VERSION here and
+# update the URL below. Do NOT silently follow 'latest'.
+GATEWAY_API_VERSION = "v1.3.0"
+
+_STATIC_INLINE_MANIFESTS = [
+    {
+        "name": "kubelet-serving-cert-approver",
+        "url": (
+            "https://raw.githubusercontent.com/alex1989hu/kubelet-serving-cert-approver"
+            "/main/deploy/standalone-install.yaml"
+        ),
+    },
+    {
+        "name": "metrics-server",
+        "url": (
+            "https://github.com/kubernetes-sigs/metrics-server"
+            "/releases/latest/download/components.yaml"
+        ),
+    },
+    {
+        "name": "gateway-api",
+        # Pinned to GATEWAY_API_VERSION — update pin when gateway-api releases a new version.
+        "url": (
+            f"https://github.com/kubernetes-sigs/gateway-api"
+            f"/releases/download/{GATEWAY_API_VERSION}/standard-install.yaml"
+        ),
+    },
+]
+
+
+def fetch_static_inline_manifests() -> list:
+    """Fetch the three static inline manifests required on every cluster.
+
+    Fetches kubelet-serving-cert-approver, metrics-server, and gateway-api
+    from their upstream URLs. Raises httpx.HTTPStatusError (wraps as 424) on
+    any fetch failure — all three are required; partial provisioning is not
+    permitted.
+
+    Returns:
+        list[dict]: Each entry has 'name' and 'contents' keys, ready for
+        insertion into the cluster-chart values inlineManifests list.
+    """
+    result = []
+    for m in _STATIC_INLINE_MANIFESTS:
+        response = httpx.get(m["url"], follow_redirects=True, timeout=30)
+        response.raise_for_status()
+        result.append({"name": m["name"], "contents": response.text})
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +300,11 @@ def _kustomizeconfig_path(name: str) -> str:
     return f"{_CLUSTER_CHARTS_BASE}/{name}/kustomizeconfig.yaml"
 
 
-def _render_values(spec: ClusterSpec, machine_template_hash: Optional[str] = None) -> str:
+def _render_values(
+    spec: ClusterSpec,
+    machine_template_hash: Optional[str] = None,
+    inline_manifests: Optional[list] = None,
+) -> str:
     """Render cluster-chart values YAML.
 
     Matches the schema used by actual cluster-chart values files:
@@ -246,6 +315,12 @@ def _render_values(spec: ClusterSpec, machine_template_hash: Optional[str] = Non
     machine_template_hash: if set (Cat 1 change), written as
       controlplane.machine_template_suffix and worker.machine_template_suffix
       so the cluster-chart generates ProxmoxMachineTemplates with new names.
+
+    inline_manifests: list of {name, contents} dicts (T-036/CC-176).
+      When provided, written as 'inlineManifests' to the values file.
+      Static public manifests (kubelet-serving-cert-approver, metrics-server,
+      gateway-api) are safe to commit; sensitive manifests (sops-age, fluxinstance)
+      are T-035 scope and must NOT be passed here.
     """
     cp_dims = spec.controlplane_dimensions or spec.dimensions
     # cluster-chart consumed fields
@@ -383,6 +458,16 @@ def _render_values(spec: ClusterSpec, machine_template_hash: Optional[str] = Non
         data["talos_version"] = spec.talos_version  # roundtrip metadata
     if spec.cert_sans:
         data.setdefault("network", {})["certSANs"] = spec.cert_sans
+
+    # T-036 (CC-176) — InlineManifests: written when provided by the caller.
+    # The caller fetches manifests before calling _render_values and passes them in.
+    # NOTE: inlineManifests written here go into the gitops values file and are therefore
+    # committed to the gitops repo. Static public manifests (kubelet-serving-cert-approver,
+    # metrics-server, gateway-api) are safe to commit. Sensitive entries (sops-age, fluxinstance)
+    # are handled by T-035 and must never be committed; the caller is responsible for passing
+    # only non-sensitive entries here (or an empty list for roundtrip metadata).
+    if inline_manifests is not None:
+        data["inlineManifests"] = inline_manifests
 
     return yaml.dump(data, default_flow_style=False)
 
@@ -737,6 +822,55 @@ def _render_storage_classes_flux_kustomization(cluster_name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# T-034 (CC-174) — piraeus-operator gitops Kustomization
+# ---------------------------------------------------------------------------
+# piraeus-operator deploys Linstor in-cluster distributed storage (DRBD).
+# Generated when storage.internal_linstor == True at cluster creation time.
+# Written to {cluster}-infra as a Flux Kustomization + GitRepository pair.
+
+_PIRAEUS_INFRA_PATH = "gitops/gitops-apps/piraeus-operator"
+# Using 'latest' tag for dev/ETE. For production, pin to a specific release tag.
+_PIRAEUS_RELEASE_URL = "https://github.com/piraeusdatastore/piraeus-operator"
+
+
+def _render_piraeus_kustomization(cluster_name: str) -> str:
+    """Flux Kustomization + GitRepository for piraeus-operator.
+
+    Written to {cluster}-infra when storage.internal_linstor is True.
+    The GitRepository tracks the piraeus-operator release repo; the
+    Kustomization applies the upstream release manifest path.
+    """
+    return textwrap.dedent(f"""\
+        ---
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        metadata:
+          name: piraeus-operator
+          namespace: flux-system
+        spec:
+          interval: 1h
+          path: ./
+          prune: true
+          sourceRef:
+            kind: GitRepository
+            name: piraeus-operator
+          postBuild:
+            substitute: {{}}
+        ---
+        apiVersion: source.toolkit.fluxcd.io/v1
+        kind: GitRepository
+        metadata:
+          name: piraeus-operator
+          namespace: flux-system
+        spec:
+          interval: 1h
+          url: {_PIRAEUS_RELEASE_URL}
+          ref:
+            tag: latest
+    """)
+
+
+# ---------------------------------------------------------------------------
 # Gateway — GatewayClass, Gateway listeners, ClusterIssuer, Certificate
 # ---------------------------------------------------------------------------
 
@@ -904,6 +1038,19 @@ class ClusterService:
         raw_cluster_chart = data.get("cluster_chart")
         cluster_chart = ClusterChartSpec(**raw_cluster_chart) if isinstance(raw_cluster_chart, dict) else None
 
+        # T-033 (CC-173) — InlineManifest redaction on read.
+        # The values file in git may contain 'inlineManifests' with full manifest contents
+        # (kubelet-serving-cert-approver, metrics-server, gateway-api from T-036, and
+        # potentially sops-age/fluxinstance from T-035 which are sensitive).
+        # We extract only the 'name' of each entry and discard 'contents'.
+        # This ensures that sensitive material (SOPS keys, Flux bootstrap config) is never
+        # returned via the API — only the manifest inventory is surfaced.
+        raw_inline = data.get("inlineManifests", [])
+        inline_names = [
+            m["name"] for m in raw_inline
+            if isinstance(m, dict) and "name" in m
+        ]
+
         spec = ClusterSpec(
             name=name,
             platform=platform,
@@ -918,6 +1065,7 @@ class ClusterService:
             ingress_connector=ingress_connector,
             storage=storage,
             cluster_chart=cluster_chart,
+            inline_manifest_names=inline_names,
         )
         return ClusterResponse(name=name, spec=spec)
 
@@ -948,16 +1096,71 @@ class ClusterService:
             # TR-039: provision repos first — cluster creation fails if this fails
             spec = await self._provision_gitops_repos(spec)
 
+        # T-036 (CC-176): fetch static inline manifests at provision time.
+        # These are public, non-sensitive manifests required on every cluster.
+        # Fetch failure raises httpx.HTTPStatusError — provisioning halts; all three required.
+        from fastapi import HTTPException
+        try:
+            static_inline = fetch_static_inline_manifests()
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(
+                status_code=424,
+                detail=(
+                    f"Failed to fetch static inline manifest "
+                    f"(HTTP {exc.response.status_code}): {exc.request.url}. "
+                    "Provisioning halted — all static inline manifests are required."
+                ),
+            ) from exc
+        except httpx.RequestError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"Network error fetching static inline manifest: {exc}. "
+                    "Provisioning halted — all static inline manifests are required."
+                ),
+            ) from exc
+
         branch = f"cluster/provision-{spec.name}-{uuid.uuid4().hex[:8]}"
         await self._git.create_branch(branch)
 
-        await self._git.write_file(_cluster_values_path(spec.name), _render_values(spec))
+        await self._git.write_file(
+            _cluster_values_path(spec.name),
+            _render_values(spec, inline_manifests=static_inline),
+        )
         await self._git.write_file(_cluster_yaml_path(spec.name), _render_cluster_yaml(spec.name))
         await self._git.write_file(_kustomization_path(spec.name), _render_kustomization(spec.name))
         await self._git.write_file(_kustomizeconfig_path(spec.name), _KUSTOMIZECONFIG)
 
         await self._git.commit(f"chore: provision cluster {spec.name}")
         await self._git.push()
+
+        # T-034 (CC-174): piraeus-operator Flux Kustomization.
+        # Generated in {cluster}-infra when storage.internal_linstor is True.
+        # Opens a separate PR on {cluster}-infra; piraeus installs Linstor in-cluster storage.
+        piraeus_pr_url: Optional[str] = None
+        if spec.storage and spec.storage.internal_linstor:
+            piraeus_branch = f"cluster/piraeus-{spec.name}-{uuid.uuid4().hex[:8]}"
+            git_infra = repo_router.git_for_infra(spec.name)
+            gh_infra = repo_router.github_for_infra(spec.name)
+            await git_infra.create_branch(piraeus_branch)
+            await git_infra.write_file(
+                f"{_PIRAEUS_INFRA_PATH}/piraeus-operator.yaml",
+                _render_piraeus_kustomization(spec.name),
+            )
+            await git_infra.commit(f"feat: add piraeus-operator kustomization for {spec.name}")
+            await git_infra.push()
+            piraeus_pr_url = await gh_infra.create_pr(
+                branch=piraeus_branch,
+                title=f"feat: piraeus-operator — {spec.name}",
+                body=(
+                    f"Adds piraeus-operator Flux Kustomization to `{spec.name}-infra`.\n\n"
+                    f"**Condition**: `storage.internal_linstor == True`\n\n"
+                    f"Deploys Linstor in-cluster distributed storage (DRBD) via the piraeus-operator.\n\n"
+                    f"**Prerequisites**: Talos drbd kernel extension must be present in the cluster image.\n"
+                ),
+                labels=["cluster", _CLUSTER_STAGE_LABEL],
+                reviewers=_CLUSTER_REVIEWERS,
+            )
 
         pr_body = (
             f"Automated cluster provisioning for `{spec.name}`.\n\n"
@@ -973,6 +1176,8 @@ class ClusterService:
                 f"- Generate per-cluster SOPS age key, encrypt with management key\n"
                 f"- Bootstrap Flux on the new cluster\n"
             )
+        if piraeus_pr_url:
+            pr_body += f"\n**piraeus-operator PR**: {piraeus_pr_url}\n"
 
         pr_url = await self._gh.create_pr(
             branch=branch,
