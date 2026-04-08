@@ -153,6 +153,15 @@ class ClusterSpec(BaseModel):
     # Maps to values key: network.certSANs. Applied only when set and non-empty.
     # Cat 4 immutable — cert SANs baked in at bootstrap; changing requires cluster reprovision.
 
+    # T-033 (CC-173) — InlineManifest redaction.
+    # On write (provision): full {name, contents} dicts go into the values file via _render_values.
+    # On read (GET /clusters): only manifest names are surfaced here; contents are never returned.
+    # The values file in git contains full contents for cluster-chart CAPI provisioning.
+    # API responses must never expose contents (SOPS key, fluxinstance) — see T-033 brief.
+    inline_manifest_names: List[str] = []
+    # Names of embedded InlineManifests. Populated on read from the values file.
+    # Contents are intentionally absent — use this field to confirm which manifests are embedded.
+
 
 class ClusterSuspendResponse(BaseModel):
     name: str
