@@ -121,7 +121,7 @@ def test_network_spec_defaults():
     n = NetworkSpec(id="abc-123", vip="10.0.0.1", ip_range="10.0.0.0/24")
     assert n.type == "flannel"
     assert n.dns_domain == "cluster.local"
-    assert n.cilium_version == "1.17.4"
+    assert n.cilium_version == "1.19.2"
     assert n.kube_proxy_replacement is True
     assert n.ingress_controller is True
     assert n.l2_load_balancer is True
