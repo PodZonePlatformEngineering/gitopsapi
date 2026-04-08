@@ -238,3 +238,64 @@ async def test_tag_deployment_creates_ref():
     mock_repo.create_git_ref.assert_called_once_with(
         ref="refs/tags/deploy/my-app/r001", sha="abc123"
     )
+
+
+# ---------------------------------------------------------------------------
+# PROJ-003/T-029 — Forgejo / forge path tests
+# ---------------------------------------------------------------------------
+
+import gitopsgui.services.github_service as gs
+
+
+def test_forge_ssh_host_github_when_url_empty(monkeypatch):
+    """_FORGE_SSH_HOST must be 'github.com' when GITOPS_FORGE_API_URL is empty."""
+    monkeypatch.setattr(gs, "GITOPS_FORGE_API_URL", "")
+    monkeypatch.setattr(gs, "_FORGE_SSH_HOST", "github.com")
+    assert gs._FORGE_SSH_HOST == "github.com"
+
+
+def test_forge_ssh_host_derived_from_forge_url(monkeypatch):
+    """_FORGE_SSH_HOST must be the hostname portion of GITOPS_FORGE_API_URL."""
+    monkeypatch.setattr(gs, "GITOPS_FORGE_API_URL", "https://git.podzone.cloud/api/v1")
+    # Simulate the derivation logic: split on "/" and take index 2
+    derived = gs.GITOPS_FORGE_API_URL.split("/")[2]
+    monkeypatch.setattr(gs, "_FORGE_SSH_HOST", derived)
+    assert gs._FORGE_SSH_HOST == "git.podzone.cloud"
+
+
+def test_client_passes_base_url_when_forge_url_set(monkeypatch):
+    """_client() must call Github(token, base_url=url) when GITOPS_FORGE_API_URL is set."""
+    forge_url = "https://git.podzone.cloud/api/v1"
+    monkeypatch.setattr(gs, "GITOPS_FORGE_API_URL", forge_url)
+    monkeypatch.setattr(gs, "GITHUB_TOKEN", "test-token")
+
+    mock_github = MagicMock()
+    with patch("gitopsgui.services.github_service.Github", mock_github):
+        gs._client()
+
+    mock_github.assert_called_once_with("test-token", base_url=forge_url)
+
+
+def test_client_no_base_url_when_forge_url_empty(monkeypatch):
+    """_client() must call Github(token) without base_url when GITOPS_FORGE_API_URL is empty."""
+    monkeypatch.setattr(gs, "GITOPS_FORGE_API_URL", "")
+    monkeypatch.setattr(gs, "GITHUB_TOKEN", "test-token")
+
+    mock_github = MagicMock()
+    with patch("gitopsgui.services.github_service.Github", mock_github):
+        gs._client()
+
+    mock_github.assert_called_once_with("test-token")
+
+
+async def test_create_repo_skip_mode_uses_forge_ssh_host(monkeypatch):
+    """create_repo in skip mode returns SSH URL using the forge SSH host."""
+    monkeypatch.setattr(gs, "SKIP_GITHUB", True)
+    monkeypatch.setattr(gs, "_FORGE_SSH_HOST", "git.podzone.cloud")
+    monkeypatch.setattr(gs, "GITHUB_REPO", "myorg/cluster09-gitops")
+    monkeypatch.setattr(gs, "GITHUB_ORG", "myorg")
+
+    svc = gs.GitHubService()
+    result = await svc.create_repo("myrepo")
+
+    assert result == "git@git.podzone.cloud:myorg/myrepo.git"

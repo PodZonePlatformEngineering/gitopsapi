@@ -39,7 +39,7 @@ from . import repo_router
 
 CLUSTER_CHART_REPO_URL = os.environ.get("GITOPS_CLUSTER_CHART_REPO_URL", "")
 CLUSTER_CHART_REPO_NAME = os.environ.get("GITOPS_CLUSTER_CHART_REPO_NAME", "cluster-charts")
-CLUSTER_CHART_VERSION = os.environ.get("GITOPS_CLUSTER_CHART_VERSION", "0.1.20")
+CLUSTER_CHART_VERSION = os.environ.get("GITOPS_CLUSTER_CHART_VERSION", "0.1.39")
 
 _CLUSTER_CHARTS_BASE = "gitops/cluster-charts"
 _CLUSTERS_BASE = "clusters"

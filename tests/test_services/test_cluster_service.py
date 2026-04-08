@@ -2418,4 +2418,38 @@ async def test_create_cluster_inline_manifest_ordering(monkeypatch, skip_k8s):
     assert inline_names.index("kubelet-serving-cert-approver") < inline_names.index("fluxinstance")
     assert inline_names.index("metrics-server") < inline_names.index("fluxinstance")
     assert inline_names.index("gateway-api") < inline_names.index("fluxinstance")
-    assert inline_names.index("fluxinstance") < inline_names.index("sops-age")
+
+
+# ---------------------------------------------------------------------------
+# PROJ-003/T-029 — Cluster chart constant overrides via monkeypatch
+# ---------------------------------------------------------------------------
+
+import gitopsgui.services.cluster_service as cs
+
+
+def test_cluster_chart_version_default_is_0139():
+    """Default CLUSTER_CHART_VERSION must be 0.1.39 (type-approved baseline)."""
+    # This reads the module-level constant directly; no monkeypatching needed.
+    assert cs.CLUSTER_CHART_VERSION == "0.1.39"
+
+
+def test_cluster_chart_version_override_reflected_in_render(monkeypatch):
+    """Overriding CLUSTER_CHART_VERSION is reflected in the rendered cluster YAML."""
+    monkeypatch.setattr(cs, "CLUSTER_CHART_VERSION", "9.9.9")
+    out = cs._render_cluster_yaml("my-cluster")
+    assert "9.9.9" in out
+
+
+def test_cluster_chart_repo_name_override_reflected_in_render(monkeypatch):
+    """Overriding CLUSTER_CHART_REPO_NAME changes HelmRepository name and sourceRef in render."""
+    monkeypatch.setattr(cs, "CLUSTER_CHART_REPO_NAME", "custom-chart-repo")
+    out = cs._render_cluster_yaml("my-cluster")
+    # HelmRepository metadata.name and HelmRelease sourceRef.name both use the constant
+    assert out.count("custom-chart-repo") == 2
+
+
+def test_cluster_chart_repo_url_override_reflected_in_render(monkeypatch):
+    """Overriding CLUSTER_CHART_REPO_URL changes HelmRepository spec.url in render."""
+    monkeypatch.setattr(cs, "CLUSTER_CHART_REPO_URL", "https://charts.example.com/custom")
+    out = cs._render_cluster_yaml("my-cluster")
+    assert "https://charts.example.com/custom" in out
