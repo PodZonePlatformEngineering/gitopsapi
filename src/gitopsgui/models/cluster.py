@@ -130,6 +130,29 @@ class ClusterSpec(BaseModel):
     storage: Optional[StorageSpec] = None  # storage class config; None = default (no linstor, no emptydir headroom)
     cluster_chart: Optional[ClusterChartSpec] = None  # CC-166: cluster-chart version binding (roundtrip metadata)
 
+    # CC-177: cluster-chart values keys required for ETE provisioning.
+    # All five map directly to cluster-chart values.yaml keys (v0.1.39+).
+    cni: Optional[str] = None
+    # CNI selection. "" = default kube-proxy; "cilium" = Cilium CNI (sets network.cni.name:none + proxy.disabled:true in chart).
+    # Cat 4 immutable — CNI type cannot be changed on a live cluster. Reprovision required.
+    # Note: proxy.disabled is derived from cni=="cilium" in the chart template; not a separate configurable field.
+
+    machine_install_disk: Optional[str] = None
+    # Install disk path, e.g. "/dev/vda" (Proxmox virtio) or "/dev/sda" (physical/SATA).
+    # Maps to values key: machine.installDisk. Chart default: /dev/vda.
+    # Cat 3 — requires node replacement to change.
+
+    talos_version: Optional[str] = None
+    # Short Talos version string, e.g. "v1.12". Used in TalosControlPlane talosVersion field.
+    # Must be consistent with talos_image (e.g. image v1.12.6 → talos_version v1.12).
+    # Maps to values key: cluster.talos_version. Also written as roundtrip metadata.
+    # Cat 1 — requires new MachineTemplate (triggers rolling update).
+
+    cert_sans: Optional[List[str]] = None
+    # Additional SANs for the API server TLS certificate. IPs or hostnames.
+    # Maps to values key: network.certSANs. Applied only when set and non-empty.
+    # Cat 4 immutable — cert SANs baked in at bootstrap; changing requires cluster reprovision.
+
 
 class ClusterSuspendResponse(BaseModel):
     name: str

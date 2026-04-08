@@ -118,6 +118,13 @@ def classify_cluster_changes(existing: "ClusterSpec", new: "ClusterSpec") -> Cha
     if (existing.platform and new.platform) and existing.platform.type != new.platform.type:
         changed.append("platform.type")
         category = ChangeCategory.PROHIBITED
+    # CC-177: cni and cert_sans are immutable at provision time
+    if existing.cni != new.cni:
+        changed.append("cni")
+        category = ChangeCategory.PROHIBITED
+    if existing.cert_sans != new.cert_sans:
+        changed.append("cert_sans")
+        category = ChangeCategory.PROHIBITED
 
     if category == ChangeCategory.PROHIBITED:
         return ChangeClassification(category=category, changed_fields=changed)
@@ -365,6 +372,18 @@ def _render_values(spec: ClusterSpec, machine_template_hash: Optional[str] = Non
             "version": spec.cluster_chart.version,
             "type": spec.cluster_chart.type,
         }
+
+    # CC-177: cluster-chart gap closure — write values keys for ETE provisioning
+    if spec.cni is not None:
+        data["cni"] = spec.cni
+    if spec.machine_install_disk:
+        data.setdefault("machine", {})["installDisk"] = spec.machine_install_disk
+    if spec.talos_version:
+        data.setdefault("cluster", {})["talos_version"] = spec.talos_version
+        data["talos_version"] = spec.talos_version  # roundtrip metadata
+    if spec.cert_sans:
+        data.setdefault("network", {})["certSANs"] = spec.cert_sans
+
     return yaml.dump(data, default_flow_style=False)
 
 

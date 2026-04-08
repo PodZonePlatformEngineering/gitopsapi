@@ -1237,3 +1237,136 @@ async def test_get_cluster_roundtrips_cluster_chart():
     assert result.spec.cluster_chart.id == "a1b2c3d4-0000-0000-0000-000000000002"
     assert result.spec.cluster_chart.version == "0.1.39"
     assert result.spec.cluster_chart.type == "proxmox-talos"
+
+
+# ---------------------------------------------------------------------------
+# CC-177: ClusterSpec gap closure — cni, machine_install_disk, talos_version, cert_sans
+# ---------------------------------------------------------------------------
+
+def test_render_values_cni_written_when_set():
+    """_render_values writes top-level 'cni' key when spec.cni is set."""
+    import yaml
+    spec = _SPEC.model_copy(update={"cni": "cilium"})
+    parsed = yaml.safe_load(_render_values(spec))
+    assert parsed["cni"] == "cilium"
+
+
+def test_render_values_cni_written_when_empty_string():
+    """_render_values writes cni: '' when spec.cni is set to empty string (explicit opt-out)."""
+    import yaml
+    spec = _SPEC.model_copy(update={"cni": ""})
+    parsed = yaml.safe_load(_render_values(spec))
+    assert "cni" in parsed
+    assert parsed["cni"] == ""
+
+
+def test_render_values_cni_omitted_when_none():
+    """_render_values does not write 'cni' key when spec.cni is None."""
+    import yaml
+    parsed = yaml.safe_load(_render_values(_SPEC))
+    assert "cni" not in parsed
+
+
+def test_render_values_machine_install_disk_written():
+    """_render_values writes machine.installDisk when spec.machine_install_disk is set."""
+    import yaml
+    spec = _SPEC.model_copy(update={"machine_install_disk": "/dev/sda"})
+    parsed = yaml.safe_load(_render_values(spec))
+    assert parsed["machine"]["installDisk"] == "/dev/sda"
+
+
+def test_render_values_machine_install_disk_omitted_when_none():
+    """_render_values does not write machine.installDisk when spec.machine_install_disk is None."""
+    import yaml
+    parsed = yaml.safe_load(_render_values(_SPEC))
+    assert "machine" not in parsed
+
+
+def test_render_values_talos_version_written_to_cluster_block():
+    """_render_values writes cluster.talos_version when spec.talos_version is set."""
+    import yaml
+    spec = _SPEC.model_copy(update={"talos_version": "v1.12"})
+    parsed = yaml.safe_load(_render_values(spec))
+    assert parsed["cluster"]["talos_version"] == "v1.12"
+
+
+def test_render_values_talos_version_written_as_roundtrip():
+    """_render_values also writes top-level talos_version for roundtrip metadata."""
+    import yaml
+    spec = _SPEC.model_copy(update={"talos_version": "v1.12"})
+    parsed = yaml.safe_load(_render_values(spec))
+    assert parsed["talos_version"] == "v1.12"
+
+
+def test_render_values_talos_version_omitted_when_none():
+    """_render_values does not write talos_version when spec.talos_version is None."""
+    import yaml
+    parsed = yaml.safe_load(_render_values(_SPEC))
+    assert "talos_version" not in parsed
+
+
+def test_render_values_cert_sans_written_to_network_block():
+    """_render_values writes network.certSANs when spec.cert_sans is set and non-empty."""
+    import yaml
+    spec = _SPEC.model_copy(update={"cert_sans": ["192.168.4.190", "k8s.internal.example.com"]})
+    parsed = yaml.safe_load(_render_values(spec))
+    assert parsed["network"]["certSANs"] == ["192.168.4.190", "k8s.internal.example.com"]
+
+
+def test_render_values_cert_sans_omitted_when_none():
+    """_render_values does not write network.certSANs when spec.cert_sans is None."""
+    import yaml
+    parsed = yaml.safe_load(_render_values(_SPEC))
+    assert "certSANs" not in parsed.get("network", {})
+
+
+def test_render_values_cert_sans_omitted_when_empty_list():
+    """_render_values does not write network.certSANs when spec.cert_sans is an empty list."""
+    import yaml
+    spec = _SPEC.model_copy(update={"cert_sans": []})
+    parsed = yaml.safe_load(_render_values(spec))
+    assert "certSANs" not in parsed.get("network", {})
+
+
+def test_render_values_all_gap_fields_roundtrip():
+    """All four CC-177 fields together render and can be re-parsed correctly."""
+    import yaml
+    spec = _SPEC.model_copy(update={
+        "cni": "cilium",
+        "machine_install_disk": "/dev/vda",
+        "talos_version": "v1.12",
+        "cert_sans": ["192.168.4.190"],
+    })
+    parsed = yaml.safe_load(_render_values(spec))
+    assert parsed["cni"] == "cilium"
+    assert parsed["machine"]["installDisk"] == "/dev/vda"
+    assert parsed["cluster"]["talos_version"] == "v1.12"
+    assert parsed["talos_version"] == "v1.12"
+    assert parsed["network"]["certSANs"] == ["192.168.4.190"]
+
+
+def test_classify_cni_change_is_prohibited():
+    """Changing cni on a live cluster is Cat 4 (immutable at provision time)."""
+    base = _SPEC_BASE.model_copy(update={"cni": ""})
+    new = _SPEC_BASE.model_copy(update={"cni": "cilium"})
+    result = classify_cluster_changes(base, new)
+    assert result.category == ChangeCategory.PROHIBITED
+    assert "cni" in result.changed_fields
+
+
+def test_classify_cert_sans_change_is_prohibited():
+    """Changing cert_sans on a live cluster is Cat 4 (baked into TLS cert at bootstrap)."""
+    base = _SPEC_BASE.model_copy(update={"cert_sans": ["192.168.4.190"]})
+    new = _SPEC_BASE.model_copy(update={"cert_sans": ["192.168.4.191"]})
+    result = classify_cluster_changes(base, new)
+    assert result.category == ChangeCategory.PROHIBITED
+    assert "cert_sans" in result.changed_fields
+
+
+def test_classify_cert_sans_none_to_set_is_prohibited():
+    """Adding cert_sans to a cluster that had none is also Cat 4."""
+    base = _SPEC_BASE.model_copy(update={"cert_sans": None})
+    new = _SPEC_BASE.model_copy(update={"cert_sans": ["192.168.4.190"]})
+    result = classify_cluster_changes(base, new)
+    assert result.category == ChangeCategory.PROHIBITED
+    assert "cert_sans" in result.changed_fields
