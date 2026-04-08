@@ -10,7 +10,9 @@ Writes go via feature branch + PR labelled 'cluster' + stage label.
 
 import hashlib
 import json
+import logging
 import os
+import subprocess
 import textwrap
 import uuid
 from dataclasses import dataclass, field
@@ -20,6 +22,8 @@ from typing import List, Optional
 
 import httpx
 import yaml
+
+logger = logging.getLogger(__name__)
 
 from ..models.cluster import (
     ClusterSpec, ClusterResponse, ClusterStatus,
@@ -108,6 +112,162 @@ def fetch_static_inline_manifests() -> list:
         response.raise_for_status()
         result.append({"name": m["name"], "contents": response.text})
     return result
+
+
+# ---------------------------------------------------------------------------
+# T-039 (CC-179) — Cilium InlineManifest generation
+# ---------------------------------------------------------------------------
+# When spec.network.type == "cilium", a cluster-specific cilium manifest is
+# generated via `helm template` at provision time. The manifest is embedded
+# as an InlineManifest alongside the static manifests (T-036).
+#
+# InlineManifest ordering:
+#   1. kubelet-serving-cert-approver (T-036)
+#   2. metrics-server (T-036)
+#   3. gateway-api (T-036)
+#   4. cilium (this task) — only when network.type="cilium"
+#   5. fluxinstance (T-035 — future)
+#   6. sops-age (T-035 — future)
+
+CILIUM_HELM_DEFAULTS = {
+    "ipam.mode": "kubernetes",
+    "cgroup.autoMount.enabled": "false",
+    "cgroup.hostRoot": "/sys/fs/cgroup",
+    "k8sServiceHost": "localhost",
+    "k8sServicePort": "7445",
+    "securityContext.capabilities.ciliumAgent": (
+        "{CHOWN,KILL,NET_ADMIN,NET_RAW,IPC_LOCK,SYS_ADMIN,"
+        "SYS_RESOURCE,DAC_OVERRIDE,FOWNER,SETGID,SETUID}"
+    ),
+    "securityContext.capabilities.cleanCiliumState": (
+        "{NET_ADMIN,SYS_ADMIN,SYS_RESOURCE}"
+    ),
+}
+
+
+def _build_cilium_helm_args(network: "NetworkSpec") -> list:
+    """Build --set arguments for helm template from NetworkSpec capability flags."""
+    args = []
+    for key, value in CILIUM_HELM_DEFAULTS.items():
+        args += ["--set", f"{key}={value}"]
+
+    if network.kube_proxy_replacement:
+        args += ["--set", "kubeProxyReplacement=true"]
+
+    if network.ingress_controller:
+        args += [
+            "--set", "ingressController.enabled=true",
+            "--set", f"ingressController.loadbalancerMode={network.ingress_controller_lb_mode}",
+        ]
+        if network.ingress_controller_default:
+            args += ["--set", "ingressController.default=true"]
+
+    if network.l2_load_balancer:
+        args += [
+            "--set", "l2announcements.enabled=true",
+            "--set", f"l2announcements.leaseDuration={network.l2_lease_duration}",
+            "--set", f"l2announcements.leaseRenewDeadline={network.l2_lease_renew_deadline}",
+            "--set", f"l2announcements.leaseRetryPeriod={network.l2_lease_retry_period}",
+            "--set", "loadBalancerIPs.enabled=true",
+        ]
+
+    if network.l7_proxy:
+        args += [
+            "--set", "l7Proxy=true",
+            "--set", "envoyConfig.enabled=true",
+            "--set", "loadBalancer.l7.backend=envoy",
+        ]
+
+    if network.gateway_api:
+        args += ["--set", "gatewayAPI.enabled=true"]
+        if network.gateway_api_alpn:
+            args += ["--set", "gatewayAPI.enableAlpn=true"]
+        if network.gateway_api_app_protocol:
+            args += ["--set", "gatewayAPI.enableAppProtocol=true"]
+
+    if network.hubble_relay:
+        args += ["--set", "hubble.relay.enabled=true"]
+    if network.hubble_ui:
+        args += ["--set", "hubble.ui.enabled=true"]
+
+    return args
+
+
+def generate_cilium_manifest(network: "NetworkSpec") -> str:
+    """Generate the cilium InlineManifest YAML using helm template.
+
+    Requires helm CLI in the gitopsapi runtime environment.
+    Raises RuntimeError on helm failure — propagates as 503 response;
+    provisioning is halted.
+    """
+    cmd = [
+        "helm", "template",
+        "cilium", "cilium/cilium",
+        "--version", network.cilium_version,
+        "--namespace", "kube-system",
+    ] + _build_cilium_helm_args(network)
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"helm template failed for cilium v{network.cilium_version}: {result.stderr}"
+        )
+
+    manifest = result.stdout
+
+    # Append L2 load balancer CRs if lb pool is configured.
+    if network.lb_pool_start and network.lb_pool_stop:
+        manifest += f"""
+---
+apiVersion: "cilium.io/v2alpha1"
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: "lb-pool"
+  namespace: kube-system
+spec:
+  blocks:
+  - start: "{network.lb_pool_start}"
+    stop: "{network.lb_pool_stop}"
+---
+apiVersion: "cilium.io/v2alpha1"
+kind: CiliumL2AnnouncementPolicy
+metadata:
+  name: l2policy
+  namespace: kube-system
+spec:
+  loadBalancerIPs: true
+"""
+
+    return manifest
+
+
+def _ensure_cilium_helm_repo() -> None:
+    """Ensure cilium helm repo is added and updated. Called once at startup.
+
+    helm repo add is idempotent (check=False — may already be added).
+    helm repo update failure is logged as a warning rather than crashing startup;
+    helm may be offline at boot — the failure will surface at provision time instead.
+    """
+    subprocess.run(
+        ["helm", "repo", "add", "cilium", "https://helm.cilium.io/"],
+        check=False,
+        capture_output=True,
+    )
+    result = subprocess.run(
+        ["helm", "repo", "update", "cilium"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        logger.warning(
+            "helm repo update cilium failed at startup (helm may be offline): %s",
+            result.stderr,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1233,12 +1393,29 @@ class ClusterService:
                 ),
             ) from exc
 
+        # T-039 (CC-179): append cilium InlineManifest when network.type == "cilium".
+        # Ordering: static manifests (T-036) first, then cilium, then fluxinstance/sops (T-035).
+        inline_manifests = list(static_inline)
+        if spec.network and spec.network.type == "cilium":
+            from fastapi import HTTPException
+            try:
+                cilium_yaml = generate_cilium_manifest(spec.network)
+            except RuntimeError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        f"Failed to generate cilium InlineManifest: {exc}. "
+                        "Provisioning halted."
+                    ),
+                ) from exc
+            inline_manifests.append({"name": "cilium", "contents": cilium_yaml})
+
         branch = f"cluster/provision-{spec.name}-{uuid.uuid4().hex[:8]}"
         await self._git.create_branch(branch)
 
         await self._git.write_file(
             _cluster_values_path(spec.name),
-            _render_values(spec, inline_manifests=static_inline),
+            _render_values(spec, inline_manifests=inline_manifests),
         )
         await self._git.write_file(_cluster_yaml_path(spec.name), _render_cluster_yaml(spec.name))
         await self._git.write_file(_kustomization_path(spec.name), _render_kustomization(spec.name))

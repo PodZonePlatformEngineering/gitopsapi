@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from gitopsgui.models.cluster import (
     ClusterSpec, ClusterDimensions, PlatformSpec, TalosTemplateSpec,
     IngressConnectorSpec, TokenSecretRef, ClusterChartSpec, StorageSpec,
+    NetworkSpec,
 )
 from gitopsgui.services.cluster_service import (
     ClusterService, _render_values, _render_kustomization, _render_cluster_yaml,
@@ -20,6 +21,8 @@ from gitopsgui.services.cluster_service import (
     fetch_static_inline_manifests, GATEWAY_API_VERSION,
     classify_cluster_changes, ChangeCategory, _dims_hash,
     _STATIC_INLINE_MANIFESTS, _PIRAEUS_INFRA_PATH,
+    _build_cilium_helm_args, generate_cilium_manifest,
+    CILIUM_HELM_DEFAULTS,
 )
 
 
@@ -1908,3 +1911,248 @@ async def test_get_cluster_derives_network_from_values_when_no_roundtrip():
     assert result.spec.network.vip == "192.168.1.1"
     assert result.spec.network.ip_range == "192.168.1.0/24"
     assert result.spec.network.type == "cilium"
+
+
+# ---------------------------------------------------------------------------
+# T-039 (CC-179) — Cilium InlineManifest generation
+# ---------------------------------------------------------------------------
+
+import subprocess as _subprocess
+
+
+def _make_network(**overrides) -> NetworkSpec:
+    """Create a NetworkSpec with cilium type and test defaults."""
+    defaults = dict(
+        id="test-net-id",
+        type="cilium",
+        vip="192.168.1.100",
+        ip_range="192.168.1.0/24",
+    )
+    defaults.update(overrides)
+    return NetworkSpec(**defaults)
+
+
+@pytest.fixture
+def mock_helm_success(monkeypatch):
+    def fake_run(cmd, **kwargs):
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "# cilium manifest\napiVersion: apps/v1\nkind: DaemonSet\n"
+        mock_result.stderr = ""
+        return mock_result
+    monkeypatch.setattr("gitopsgui.services.cluster_service.subprocess.run", fake_run)
+
+
+@pytest.fixture
+def mock_helm_failure(monkeypatch):
+    def fake_run(cmd, **kwargs):
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stdout = ""
+        mock_result.stderr = "Error: chart not found"
+        return mock_result
+    monkeypatch.setattr("gitopsgui.services.cluster_service.subprocess.run", fake_run)
+
+
+# --- _build_cilium_helm_args ---
+
+def test_build_cilium_helm_args_includes_gateway_api_when_enabled():
+    network = _make_network(gateway_api=True)
+    args = _build_cilium_helm_args(network)
+    assert "--set" in args
+    idx = args.index("gatewayAPI.enabled=true")
+    assert args[idx - 1] == "--set"
+
+
+def test_build_cilium_helm_args_omits_hubble_relay_when_false():
+    network = _make_network(hubble_relay=False)
+    args = _build_cilium_helm_args(network)
+    assert "hubble.relay.enabled=true" not in args
+
+
+def test_build_cilium_helm_args_includes_hubble_relay_when_true():
+    network = _make_network(hubble_relay=True)
+    args = _build_cilium_helm_args(network)
+    assert "hubble.relay.enabled=true" in args
+
+
+def test_build_cilium_helm_args_includes_all_defaults():
+    """All CILIUM_HELM_DEFAULTS keys must appear as --set args."""
+    network = _make_network()
+    args = _build_cilium_helm_args(network)
+    for key, value in CILIUM_HELM_DEFAULTS.items():
+        assert f"{key}={value}" in args
+
+
+def test_build_cilium_helm_args_includes_kube_proxy_replacement_by_default():
+    network = _make_network(kube_proxy_replacement=True)
+    args = _build_cilium_helm_args(network)
+    assert "kubeProxyReplacement=true" in args
+
+
+def test_build_cilium_helm_args_omits_kube_proxy_replacement_when_false():
+    network = _make_network(kube_proxy_replacement=False)
+    args = _build_cilium_helm_args(network)
+    assert "kubeProxyReplacement=true" not in args
+
+
+def test_build_cilium_helm_args_includes_l2_announcements_when_enabled():
+    network = _make_network(l2_load_balancer=True)
+    args = _build_cilium_helm_args(network)
+    assert "l2announcements.enabled=true" in args
+
+
+def test_build_cilium_helm_args_includes_l7_proxy_when_enabled():
+    network = _make_network(l7_proxy=True)
+    args = _build_cilium_helm_args(network)
+    assert "l7Proxy=true" in args
+
+
+def test_build_cilium_helm_args_includes_ingress_controller_when_enabled():
+    network = _make_network(ingress_controller=True)
+    args = _build_cilium_helm_args(network)
+    assert "ingressController.enabled=true" in args
+
+
+def test_build_cilium_helm_args_gateway_api_alpn_when_set():
+    network = _make_network(gateway_api=True, gateway_api_alpn=True)
+    args = _build_cilium_helm_args(network)
+    assert "gatewayAPI.enableAlpn=true" in args
+
+
+def test_build_cilium_helm_args_no_gateway_api_alpn_when_not_set():
+    network = _make_network(gateway_api=True, gateway_api_alpn=False)
+    args = _build_cilium_helm_args(network)
+    assert "gatewayAPI.enableAlpn=true" not in args
+
+
+# --- generate_cilium_manifest ---
+
+def test_generate_cilium_manifest_returns_yaml_string(mock_helm_success):
+    network = _make_network()
+    result = generate_cilium_manifest(network)
+    assert isinstance(result, str)
+    assert len(result) > 0
+    assert "apiVersion" in result
+
+
+def test_generate_cilium_manifest_lb_pool_crs_appended_when_set(mock_helm_success):
+    network = _make_network(lb_pool_start="192.168.1.200", lb_pool_stop="192.168.1.250")
+    result = generate_cilium_manifest(network)
+    assert "CiliumLoadBalancerIPPool" in result
+    assert "CiliumL2AnnouncementPolicy" in result
+    assert "192.168.1.200" in result
+    assert "192.168.1.250" in result
+
+
+def test_generate_cilium_manifest_lb_pool_crs_absent_when_not_set(mock_helm_success):
+    network = _make_network(lb_pool_start=None, lb_pool_stop=None)
+    result = generate_cilium_manifest(network)
+    assert "CiliumLoadBalancerIPPool" not in result
+    assert "CiliumL2AnnouncementPolicy" not in result
+
+
+def test_generate_cilium_manifest_raises_on_helm_failure(mock_helm_failure):
+    network = _make_network()
+    with pytest.raises(RuntimeError, match="helm template failed"):
+        generate_cilium_manifest(network)
+
+
+# --- integration: cilium manifest in _render_values / create_cluster ---
+
+def test_render_values_includes_inline_manifests_with_cilium():
+    """When inline_manifests list contains cilium, it appears in rendered values."""
+    cilium_inline = [
+        {"name": "kubelet-serving-cert-approver", "contents": "# approver\n"},
+        {"name": "metrics-server", "contents": "# metrics\n"},
+        {"name": "gateway-api", "contents": "# gateway\n"},
+        {"name": "cilium", "contents": "# cilium manifest\n"},
+    ]
+    spec = _SPEC.model_copy(update={
+        "network": _make_network(),
+    })
+    out = _render_values(spec, inline_manifests=cilium_inline)
+    assert "cilium" in out
+    assert "inlineManifests" in out
+
+
+@pytest.mark.asyncio
+async def test_create_cluster_includes_cilium_in_inline_manifests(monkeypatch):
+    """When network.type="cilium", cilium InlineManifest is appended after static manifests."""
+    # Mock fetch_static_inline_manifests
+    static_manifests = [
+        {"name": "kubelet-serving-cert-approver", "contents": "# approver\n"},
+        {"name": "metrics-server", "contents": "# metrics\n"},
+        {"name": "gateway-api", "contents": "# gateway\n"},
+    ]
+    monkeypatch.setattr(
+        "gitopsgui.services.cluster_service.fetch_static_inline_manifests",
+        lambda: static_manifests,
+    )
+    # Mock generate_cilium_manifest
+    monkeypatch.setattr(
+        "gitopsgui.services.cluster_service.generate_cilium_manifest",
+        lambda network: "# cilium manifest\napiVersion: apps/v1\nkind: DaemonSet\n",
+    )
+
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.create_branch = AsyncMock()
+    svc._git.write_file = AsyncMock()
+    svc._git.commit = AsyncMock(return_value="sha123")
+    svc._git.push = AsyncMock()
+    svc._gh = AsyncMock()
+    svc._gh.create_pr = AsyncMock(return_value="https://github.com/test/repo/pull/1")
+
+    spec = _SPEC.model_copy(update={"network": _make_network(type="cilium")})
+    await svc.create_cluster(spec)
+
+    # Verify values file was written with cilium in inlineManifests
+    written_values = None
+    for call in svc._git.write_file.call_args_list:
+        path = call.args[0]
+        if "values" in path:
+            written_values = call.args[1]
+            break
+    assert written_values is not None
+    assert "cilium" in written_values
+    assert "inlineManifests" in written_values
+
+
+@pytest.mark.asyncio
+async def test_create_cluster_no_cilium_when_flannel(monkeypatch):
+    """When network.type="flannel" (or no network), cilium is NOT in inlineManifests."""
+    static_manifests = [
+        {"name": "kubelet-serving-cert-approver", "contents": "# approver\n"},
+        {"name": "metrics-server", "contents": "# metrics\n"},
+        {"name": "gateway-api", "contents": "# gateway\n"},
+    ]
+    monkeypatch.setattr(
+        "gitopsgui.services.cluster_service.fetch_static_inline_manifests",
+        lambda: static_manifests,
+    )
+
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.create_branch = AsyncMock()
+    svc._git.write_file = AsyncMock()
+    svc._git.commit = AsyncMock(return_value="sha123")
+    svc._git.push = AsyncMock()
+    svc._gh = AsyncMock()
+    svc._gh.create_pr = AsyncMock(return_value="https://github.com/test/repo/pull/1")
+
+    # Use _SPEC which has no network set (will migrate to flannel via model_validator)
+    await svc.create_cluster(_SPEC)
+
+    written_values = None
+    for call in svc._git.write_file.call_args_list:
+        path = call.args[0]
+        if "values" in path:
+            written_values = call.args[1]
+            break
+    assert written_values is not None
+    # cilium inline manifest name should NOT be in values when flannel
+    import yaml as _yaml_check
+    data = _yaml_check.safe_load(written_values)
+    inline_names = [m["name"] for m in data.get("inlineManifests", [])]
+    assert "cilium" not in inline_names

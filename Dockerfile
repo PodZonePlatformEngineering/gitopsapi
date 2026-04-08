@@ -10,6 +10,14 @@ RUN npm run build
 FROM python:3.11-slim AS api
 WORKDIR /app
 
+# Install helm
+ARG HELM_VERSION=3.17.3
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && curl -fsSL https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz \
+       | tar -xz --strip-components=1 -C /usr/local/bin linux-amd64/helm \
+    && apt-get purge -y curl \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install Python dependencies
 COPY pyproject.toml ./
 RUN pip install --no-cache-dir -e .
