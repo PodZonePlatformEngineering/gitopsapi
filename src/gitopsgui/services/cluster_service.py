@@ -527,6 +527,12 @@ def classify_cluster_changes(existing: "ClusterSpec", new: "ClusterSpec") -> Cha
     if (old_s.emptydir_gb if old_s else 0) != (new_s.emptydir_gb if new_s else 0):
         immutable_changes.append("storage.emptydir_gb")
 
+    # CC-147: registry mirrors and observability agent — Cat 1
+    if existing.registry_mirrors != new.registry_mirrors:
+        immutable_changes.append("registry_mirrors")
+    if existing.observability_agent != new.observability_agent:
+        immutable_changes.append("observability_agent")
+
     # CC-178: NetworkSpec Cat 1 checks — Cilium version + capability flags.
     # All changes trigger a new InlineManifest → new MachineTemplate → rolling replacement.
     if existing.network and new.network:
@@ -838,6 +844,19 @@ def _render_values(
     # only non-sensitive entries here (or an empty list for roundtrip metadata).
     if inline_manifests is not None:
         data["inlineManifests"] = inline_manifests
+
+    # CC-147: registry mirrors — Talos registries block consumed by cluster-chart.
+    # Always written (enabled=False + empty mirrors when no mirrors configured).
+    data["registries"] = {
+        "enabled": bool(spec.registry_mirrors),
+        "mirrors": {
+            m.registry: {
+                "endpoints": m.endpoints,
+                "overridePath": m.override_path,
+            }
+            for m in spec.registry_mirrors
+        },
+    }
 
     return yaml.dump(data, default_flow_style=False)
 
@@ -1595,6 +1614,27 @@ class ClusterService:
                 labels=["cluster", _CLUSTER_STAGE_LABEL],
                 reviewers=_CLUSTER_REVIEWERS,
             )
+
+        # CC-147: observability agent assignment — non-fatal at cluster creation time.
+        # Only triggered when observability_agent is set AND managed_gitops is True.
+        if spec.observability_agent and spec.managed_gitops:
+            from .app_config_service import AppConfigService
+            from ..models.application_config import ApplicationDeployment
+            app_cfg = AppConfigService()
+            try:
+                await app_cfg.create(ApplicationDeployment(
+                    app_id=spec.observability_agent,
+                    cluster_id=spec.name,
+                ))
+            except Exception:
+                # App assignment failure is non-fatal at cluster creation time —
+                # the cluster is already provisioned. Log and continue.
+                import logging
+                logging.getLogger(__name__).warning(
+                    "observability agent assignment failed for %s/%s",
+                    spec.name,
+                    spec.observability_agent,
+                )
 
         pr_body = (
             f"Automated cluster provisioning for `{spec.name}`.\n\n"

@@ -4,7 +4,7 @@ Pydantic model validation tests for cluster models.
 
 import pytest
 from pydantic import ValidationError
-from gitopsgui.models.cluster import ClusterSpec, ClusterDimensions, ClusterResponse, PlatformSpec, NetworkSpec
+from gitopsgui.models.cluster import ClusterSpec, ClusterDimensions, ClusterResponse, PlatformSpec, NetworkSpec, RegistryMirrorSpec
 
 
 def test_cluster_spec_defaults():
@@ -230,3 +230,68 @@ def test_cluster_spec_migration_validator_generates_uuid_id():
         r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     )
     assert uuid_pattern.match(spec.network.id) is not None
+
+
+# ---------------------------------------------------------------------------
+# CC-147: RegistryMirrorSpec + ClusterSpec new fields
+# ---------------------------------------------------------------------------
+
+def test_registry_mirror_spec_defaults():
+    """RegistryMirrorSpec.override_path defaults to True."""
+    m = RegistryMirrorSpec(registry="docker.io", endpoints=["http://nexus.local/proxy-dockerhub"])
+    assert m.override_path is True
+
+
+def test_registry_mirror_spec_override_path_can_be_false():
+    m = RegistryMirrorSpec(registry="gcr.io", endpoints=["http://nexus.local/proxy-gcr"], override_path=False)
+    assert m.override_path is False
+
+
+def test_cluster_spec_registry_mirrors_defaults_empty():
+    """ClusterSpec.registry_mirrors defaults to an empty list."""
+    spec = ClusterSpec(
+        name="test-cluster",
+        vip="192.168.1.100",
+        ip_range="192.168.1.0/24",
+        dimensions=ClusterDimensions(),
+        sops_secret_ref="sops-key",
+    )
+    assert spec.registry_mirrors == []
+
+
+def test_cluster_spec_registry_mirrors_accepts_entries():
+    mirror = RegistryMirrorSpec(registry="docker.io", endpoints=["http://nexus.local/proxy-dockerhub"])
+    spec = ClusterSpec(
+        name="test-cluster",
+        vip="192.168.1.100",
+        ip_range="192.168.1.0/24",
+        dimensions=ClusterDimensions(),
+        sops_secret_ref="sops-key",
+        registry_mirrors=[mirror],
+    )
+    assert len(spec.registry_mirrors) == 1
+    assert spec.registry_mirrors[0].registry == "docker.io"
+
+
+def test_cluster_spec_observability_agent_defaults_empty():
+    """ClusterSpec.observability_agent defaults to ''."""
+    spec = ClusterSpec(
+        name="test-cluster",
+        vip="192.168.1.100",
+        ip_range="192.168.1.0/24",
+        dimensions=ClusterDimensions(),
+        sops_secret_ref="sops-key",
+    )
+    assert spec.observability_agent == ""
+
+
+def test_cluster_spec_observability_agent_can_be_set():
+    spec = ClusterSpec(
+        name="test-cluster",
+        vip="192.168.1.100",
+        ip_range="192.168.1.0/24",
+        dimensions=ClusterDimensions(),
+        sops_secret_ref="sops-key",
+        observability_agent="fluentbit",
+    )
+    assert spec.observability_agent == "fluentbit"

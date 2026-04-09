@@ -228,6 +228,12 @@ class NetworkSpec(BaseModel):
     # Cilium-specific. Opt-in.
 
 
+class RegistryMirrorSpec(BaseModel):
+    registry: str                   # e.g. "docker.io", "ghcr.io", "gcr.io"
+    endpoints: List[str]            # e.g. ["http://nexus.local/proxy-dockerhub"]
+    override_path: bool = True      # Talos overridePath — True for Nexus-style path-based proxies
+
+
 class ClusterSpec(BaseModel):
     name: str
     platform: Optional[PlatformSpec] = None  # null for externally-managed clusters (managed_gitops=False)
@@ -294,6 +300,15 @@ class ClusterSpec(BaseModel):
     inline_manifest_names: List[str] = []
     # Names of embedded InlineManifests. Populated on read from the values file.
     # Contents are intentionally absent — use this field to confirm which manifests are embedded.
+
+    # CC-147: Registry mirrors — Talos registries config.
+    # Cat 1 change (baked into Talos machine config; rolling node replacement required).
+    registry_mirrors: List[RegistryMirrorSpec] = []
+
+    # CC-147: Observability agent — "" = none; "fluentbit" = deploy Fluent Bit.
+    # Cat 1 change — triggers AppConfigService.create() on cluster provisioning.
+    # Future values: "opentelemetry-operator".
+    observability_agent: str = ""
 
     @model_validator(mode='before')
     @classmethod
