@@ -2453,3 +2453,182 @@ def test_cluster_chart_repo_url_override_reflected_in_render(monkeypatch):
     monkeypatch.setattr(cs, "CLUSTER_CHART_REPO_URL", "https://charts.example.com/custom")
     out = cs._render_cluster_yaml("my-cluster")
     assert "https://charts.example.com/custom" in out
+
+
+# ---------------------------------------------------------------------------
+# CC-147: Registry Mirrors — _render_values
+# ---------------------------------------------------------------------------
+
+from gitopsgui.models.cluster import RegistryMirrorSpec
+
+
+def test_render_values_registry_mirrors_empty_writes_disabled():
+    """When registry_mirrors is empty, registries block is written with enabled=False."""
+    import yaml as _yaml
+    out = _render_values(_SPEC)
+    data = _yaml.safe_load(out)
+    assert "registries" in data
+    assert data["registries"]["enabled"] is False
+    assert data["registries"]["mirrors"] == {}
+
+
+def test_render_values_registry_mirrors_single_entry():
+    """A single registry mirror is correctly serialised."""
+    import yaml as _yaml
+    mirror = RegistryMirrorSpec(
+        registry="docker.io",
+        endpoints=["http://nexus.local/proxy-dockerhub"],
+        override_path=True,
+    )
+    spec = _SPEC.model_copy(update={"registry_mirrors": [mirror]})
+    out = _render_values(spec)
+    data = _yaml.safe_load(out)
+    assert data["registries"]["enabled"] is True
+    assert "docker.io" in data["registries"]["mirrors"]
+    entry = data["registries"]["mirrors"]["docker.io"]
+    assert entry["endpoints"] == ["http://nexus.local/proxy-dockerhub"]
+    assert entry["overridePath"] is True
+
+
+def test_render_values_registry_mirrors_multiple_entries():
+    """Multiple registry mirrors all appear in the mirrors dict."""
+    import yaml as _yaml
+    mirrors = [
+        RegistryMirrorSpec(registry="docker.io", endpoints=["http://nexus.local/proxy-dockerhub"]),
+        RegistryMirrorSpec(registry="ghcr.io", endpoints=["http://nexus.local/proxy-ghcr"]),
+        RegistryMirrorSpec(registry="gcr.io", endpoints=["http://nexus.local/proxy-gcr"], override_path=False),
+    ]
+    spec = _SPEC.model_copy(update={"registry_mirrors": mirrors})
+    out = _render_values(spec)
+    data = _yaml.safe_load(out)
+    assert data["registries"]["enabled"] is True
+    assert set(data["registries"]["mirrors"].keys()) == {"docker.io", "ghcr.io", "gcr.io"}
+    assert data["registries"]["mirrors"]["gcr.io"]["overridePath"] is False
+
+
+def test_classify_registry_mirrors_change_is_cat1():
+    """Changing registry_mirrors is classified as Cat 1."""
+    mirror = RegistryMirrorSpec(registry="docker.io", endpoints=["http://nexus.local/proxy-dockerhub"])
+    new = _SPEC_BASE.model_copy(update={"registry_mirrors": [mirror]})
+    result = classify_cluster_changes(_SPEC_BASE, new)
+    assert result.category == ChangeCategory.IMMUTABLE_TEMPLATE
+    assert "registry_mirrors" in result.changed_fields
+
+
+# ---------------------------------------------------------------------------
+# CC-147: Observability Agent — create_cluster + classify_cluster_changes
+# ---------------------------------------------------------------------------
+
+def test_classify_observability_agent_change_is_cat1():
+    """Changing observability_agent is classified as Cat 1."""
+    new = _SPEC_BASE.model_copy(update={"observability_agent": "fluentbit"})
+    result = classify_cluster_changes(_SPEC_BASE, new)
+    assert result.category == ChangeCategory.IMMUTABLE_TEMPLATE
+    assert "observability_agent" in result.changed_fields
+
+
+async def test_create_cluster_observability_agent_not_called_when_empty():
+    """create_cluster does not call AppConfigService.create when observability_agent is ''."""
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.create_branch = AsyncMock()
+    svc._git.write_file = AsyncMock()
+    svc._git.commit = AsyncMock(return_value="sha")
+    svc._git.push = AsyncMock()
+    svc._gh = AsyncMock()
+    svc._gh.create_pr = AsyncMock(return_value="https://github.com/test/repo/pull/1")
+
+    spec = _SPEC.model_copy(update={"observability_agent": ""})
+
+    # AppConfigService is imported lazily inside create_cluster; patch it at its source module
+    with patch("gitopsgui.services.app_config_service.AppConfigService") as mock_cls:
+        await svc.create_cluster(spec)
+        mock_cls.assert_not_called()
+
+
+async def test_create_cluster_observability_agent_called_when_set_and_managed_gitops():
+    """create_cluster calls AppConfigService.create with correct args when observability_agent set."""
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.create_branch = AsyncMock()
+    svc._git.write_file = AsyncMock()
+    svc._git.commit = AsyncMock(return_value="sha")
+    svc._git.push = AsyncMock()
+    svc._gh = AsyncMock()
+    svc._gh.create_pr = AsyncMock(return_value="https://github.com/test/repo/pull/1")
+
+    spec = _SPEC.model_copy(update={
+        "observability_agent": "fluentbit",
+        "managed_gitops": True,
+        "gitops_repo_url": "https://github.com/test/infra",
+    })
+
+    mock_app_cfg = AsyncMock()
+    mock_app_cfg.create = AsyncMock(return_value=None)
+    mock_app_cfg_cls = MagicMock(return_value=mock_app_cfg)
+
+    # The import is inside the function body: `from .app_config_service import AppConfigService`
+    # Patch the class at its definition location
+    with patch("gitopsgui.services.app_config_service.AppConfigService", mock_app_cfg_cls):
+        # _provision_gitops_repos is called for managed_gitops=True — stub it
+        svc._provision_gitops_repos = AsyncMock(return_value=spec)
+        await svc.create_cluster(spec)
+
+    mock_app_cfg.create.assert_called_once()
+    call_args = mock_app_cfg.create.call_args[0][0]
+    assert call_args.app_id == "fluentbit"
+    assert call_args.cluster_id == spec.name
+
+
+async def test_create_cluster_observability_agent_not_called_when_managed_gitops_false():
+    """create_cluster skips AppConfigService.create when managed_gitops=False."""
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.create_branch = AsyncMock()
+    svc._git.write_file = AsyncMock()
+    svc._git.commit = AsyncMock(return_value="sha")
+    svc._git.push = AsyncMock()
+    svc._gh = AsyncMock()
+    svc._gh.create_pr = AsyncMock(return_value="https://github.com/test/repo/pull/1")
+
+    spec = _SPEC.model_copy(update={
+        "observability_agent": "fluentbit",
+        "managed_gitops": False,
+        "gitops_repo_url": "https://github.com/test/infra",
+    })
+
+    mock_app_cfg = AsyncMock()
+    mock_app_cfg_cls = MagicMock(return_value=mock_app_cfg)
+
+    with patch("gitopsgui.services.app_config_service.AppConfigService", mock_app_cfg_cls):
+        await svc.create_cluster(spec)
+        mock_app_cfg.create.assert_not_called()
+
+
+async def test_create_cluster_observability_agent_exception_is_non_fatal():
+    """AppConfigService.create raising an exception does not prevent cluster creation."""
+    svc = ClusterService()
+    svc._git = AsyncMock()
+    svc._git.create_branch = AsyncMock()
+    svc._git.write_file = AsyncMock()
+    svc._git.commit = AsyncMock(return_value="sha")
+    svc._git.push = AsyncMock()
+    svc._gh = AsyncMock()
+    svc._gh.create_pr = AsyncMock(return_value="https://github.com/test/repo/pull/1")
+
+    spec = _SPEC.model_copy(update={
+        "observability_agent": "fluentbit",
+        "managed_gitops": True,
+        "gitops_repo_url": "https://github.com/test/infra",
+    })
+
+    mock_app_cfg = AsyncMock()
+    mock_app_cfg.create = AsyncMock(side_effect=Exception("assignment failure"))
+    mock_app_cfg_cls = MagicMock(return_value=mock_app_cfg)
+
+    with patch("gitopsgui.services.app_config_service.AppConfigService", mock_app_cfg_cls):
+        svc._provision_gitops_repos = AsyncMock(return_value=spec)
+        # Must not raise — exception is swallowed and logged
+        result = await svc.create_cluster(spec)
+
+    assert result.pr_url == "https://github.com/test/repo/pull/1"
