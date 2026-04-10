@@ -62,3 +62,47 @@ class HypervisorResponse(HypervisorSpec):
 
 class HypervisorListResponse(BaseModel):
     items: List[HypervisorResponse]
+
+
+class BootstrapConfig(BaseModel):
+    """Input for POST /hypervisors/{name}/bootstrap."""
+
+    talos_version: str = "v1.12.6"
+    talos_schema_id: str = "6adc7e7fba27948460e2231e5272e88b85159da3f3db980551976bf9898ff64b"
+    cluster_name: str
+    # e.g. "mercury-management"
+
+    vip: str
+    # Control-plane VIP, e.g. "192.168.4.150"
+
+    template_vmid: int = 9000
+    new_vmid: int = 100
+    cpu: int = 4
+    memory_mb: int = 8192
+    disk_gb: int = 50
+    install_disk: str = "/dev/vda"
+    kubernetes_version: str = "v1.34.6"
+
+    cluster_chart_repo_url: str = "oci://ghcr.io/podzoneplatformengineering/cluster-chart"
+    cluster_chart_version: str = "0.1.40"
+
+    skip_template: bool = False
+    # Set True if talos template VM already exists — skips egg-template.sh
+
+
+class BootstrapStatus(BaseModel):
+    """Response for POST /hypervisors/{name}/bootstrap."""
+
+    hypervisor: str
+    cluster_name: str
+    status: str
+    # "complete" | "failed"
+
+    steps_completed: List[str]
+    # e.g. ["audit", "template", "provision", "platform_install"]
+
+    kubeconfig_secret_name: Optional[str] = None
+    # K8s Secret name where kubeconfig was stored, if applicable
+
+    error: Optional[str] = None
+    # Set on failure

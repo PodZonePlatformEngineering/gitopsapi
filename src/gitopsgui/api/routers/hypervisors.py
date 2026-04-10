@@ -1,7 +1,11 @@
 from fastapi import APIRouter, HTTPException
 
-from ...models.hypervisor import HypervisorSpec, HypervisorResponse, HypervisorListResponse
+from ...models.hypervisor import (
+    HypervisorSpec, HypervisorResponse, HypervisorListResponse,
+    BootstrapConfig, BootstrapStatus,
+)
 from ...services.hypervisor_service import HypervisorService
+from ...services.egg_script_service import EggScriptError
 from ..auth import require_role
 
 router = APIRouter(tags=["hypervisors"])
@@ -64,6 +68,23 @@ async def run_hypervisor_audit(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/hypervisors/{name}/bootstrap", response_model=BootstrapStatus, status_code=200)
+async def bootstrap_hypervisor(
+    name: str,
+    config: BootstrapConfig,
+    _=require_role("cluster_operator"),
+):
+    svc = HypervisorService()
+    try:
+        return await svc.bootstrap(name, config)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except EggScriptError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.delete("/hypervisors/{name}", status_code=204)

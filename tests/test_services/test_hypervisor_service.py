@@ -6,8 +6,9 @@ import pytest
 from unittest.mock import AsyncMock, patch
 
 import gitopsgui.services.hypervisor_service as hs_module
-from gitopsgui.models.hypervisor import HypervisorSpec
+from gitopsgui.models.hypervisor import HypervisorSpec, BootstrapConfig
 from gitopsgui.services.hypervisor_service import HypervisorService
+from gitopsgui.services.egg_script_service import EggScriptError
 
 
 _SPEC = HypervisorSpec(
@@ -264,3 +265,134 @@ async def test_run_audit_partial_result_defaults_to_empty():
     assert result.audit.template_vms == []
     assert result.audit.proxmox_nodes == []
     assert result.audit.last_audited == "2026-04-11T10:00:00Z"
+
+
+# ---------------------------------------------------------------------------
+# bootstrap
+# ---------------------------------------------------------------------------
+
+MOCK_PROVISION_RESULT = {
+    "status": "provisioned",
+    "cluster": "mercury-management",
+    "vip": "192.168.4.150",
+    "kubeconfig_path": "/tmp/mercury-management.kubeconfig",
+}
+
+_BOOTSTRAP_CONFIG = BootstrapConfig(
+    cluster_name="mercury-management",
+    vip="192.168.4.150",
+)
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_success_all_steps():
+    svc = _svc()
+    await svc.create(_SPEC_WITH_SSH)
+    with (
+        patch(
+            "gitopsgui.services.egg_script_service.EggScriptService.audit",
+            new=AsyncMock(return_value=MOCK_AUDIT_RESULT),
+        ),
+        patch(
+            "gitopsgui.services.egg_script_service.EggScriptService.create_template",
+            new=AsyncMock(return_value={}),
+        ),
+        patch(
+            "gitopsgui.services.egg_script_service.EggScriptService.provision_cluster",
+            new=AsyncMock(return_value=MOCK_PROVISION_RESULT),
+        ),
+        patch(
+            "gitopsgui.services.egg_script_service.EggScriptService.download_kubeconfig",
+            new=AsyncMock(return_value=b"kubeconfig-bytes"),
+        ),
+        patch(
+            "gitopsgui.services.egg_script_service.EggScriptService.platform_install",
+            new=AsyncMock(return_value={}),
+        ),
+    ):
+        result = await svc.bootstrap("mercury", _BOOTSTRAP_CONFIG)
+    assert result.status == "complete"
+    assert result.hypervisor == "mercury"
+    assert result.cluster_name == "mercury-management"
+    assert result.steps_completed == [
+        "audit", "template", "provision", "download_kubeconfig", "platform_install"
+    ]
+    assert result.kubeconfig_secret_name == "mercury-management-kubeconfig"
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_skip_template_omits_template_step():
+    svc = _svc()
+    await svc.create(_SPEC_WITH_SSH)
+    config = BootstrapConfig(
+        cluster_name="mercury-management",
+        vip="192.168.4.150",
+        skip_template=True,
+    )
+    with (
+        patch(
+            "gitopsgui.services.egg_script_service.EggScriptService.audit",
+            new=AsyncMock(return_value=MOCK_AUDIT_RESULT),
+        ),
+        patch(
+            "gitopsgui.services.egg_script_service.EggScriptService.provision_cluster",
+            new=AsyncMock(return_value=MOCK_PROVISION_RESULT),
+        ),
+        patch(
+            "gitopsgui.services.egg_script_service.EggScriptService.download_kubeconfig",
+            new=AsyncMock(return_value=b"kubeconfig-bytes"),
+        ),
+        patch(
+            "gitopsgui.services.egg_script_service.EggScriptService.platform_install",
+            new=AsyncMock(return_value={}),
+        ),
+    ):
+        result = await svc.bootstrap("mercury", config)
+    assert "template" not in result.steps_completed
+    assert result.steps_completed == [
+        "audit", "provision", "download_kubeconfig", "platform_install"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_missing_hypervisor_raises_file_not_found():
+    with pytest.raises(FileNotFoundError, match="not found"):
+        await _svc().bootstrap("ghost", _BOOTSTRAP_CONFIG)
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_no_ssh_credentials_ref_raises_value_error():
+    svc = _svc()
+    await svc.create(_SPEC)  # _SPEC has no ssh_credentials_ref
+    with pytest.raises(ValueError, match="no ssh_credentials_ref"):
+        await svc.bootstrap("mercury", _BOOTSTRAP_CONFIG)
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_egg_script_error_propagates():
+    svc = _svc()
+    await svc.create(_SPEC_WITH_SSH)
+    with (
+        patch(
+            "gitopsgui.services.egg_script_service.EggScriptService.audit",
+            new=AsyncMock(return_value=MOCK_AUDIT_RESULT),
+        ),
+        patch(
+            "gitopsgui.services.egg_script_service.EggScriptService.create_template",
+            new=AsyncMock(return_value={}),
+        ),
+        patch(
+            "gitopsgui.services.egg_script_service.EggScriptService.provision_cluster",
+            new=AsyncMock(side_effect=EggScriptError("egg-provision.sh exited 1: error")),
+        ),
+    ):
+        with pytest.raises(EggScriptError):
+            await svc.bootstrap("mercury", _BOOTSTRAP_CONFIG)
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_config_defaults():
+    config = BootstrapConfig(cluster_name="test-cluster", vip="192.168.1.1")
+    assert config.talos_version == "v1.12.6"
+    assert config.cpu == 4
+    assert config.memory_mb == 8192
