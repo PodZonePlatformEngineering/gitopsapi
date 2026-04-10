@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 
-from .routers import clusters, applications, application_configs, pipelines, prs, repositories, status, forges, repos, sops_keys, ingress
+from .routers import clusters, applications, application_configs, pipelines, prs, repositories, status, forges, repos, sops_keys, ingress, hypervisors
 
 # Set to True once startup tasks (git init, kubeconfig) complete successfully.
 _ready = False
@@ -56,6 +56,7 @@ app.include_router(forges.router, prefix="/api/v1")
 app.include_router(repos.router, prefix="/api/v1")
 app.include_router(sops_keys.router, prefix="/api/v1")
 app.include_router(ingress.router, prefix="/api/v1")
+app.include_router(hypervisors.router, prefix="/api/v1")
 
 
 # CC-009: Lightweight health and readiness probes (no auth, no git I/O).
