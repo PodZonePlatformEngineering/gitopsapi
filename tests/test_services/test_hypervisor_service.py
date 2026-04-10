@@ -156,3 +156,37 @@ async def test_delete_existing():
 async def test_delete_missing_raises_file_not_found():
     with pytest.raises(FileNotFoundError, match="not found"):
         await _svc().delete("ghost")
+
+
+# ---------------------------------------------------------------------------
+# get_ssh_context
+# ---------------------------------------------------------------------------
+
+_SPEC_WITH_SSH = HypervisorSpec(
+    name="mercury",
+    endpoint="https://192.168.4.52:8006/",
+    host_ip="192.168.4.52",
+    ssh_credentials_ref="mercury-root",
+)
+
+
+@pytest.mark.asyncio
+async def test_get_ssh_context_returns_dict():
+    svc = _svc()
+    await svc.create(_SPEC_WITH_SSH)
+    ctx = await svc.get_ssh_context("mercury")
+    assert ctx == {"host_ip": "192.168.4.52", "ssh_credentials_ref": "mercury-root"}
+
+
+@pytest.mark.asyncio
+async def test_get_ssh_context_missing_raises_file_not_found():
+    with pytest.raises(FileNotFoundError, match="not found"):
+        await _svc().get_ssh_context("ghost")
+
+
+@pytest.mark.asyncio
+async def test_get_ssh_context_no_credentials_ref_raises_value_error():
+    svc = _svc()
+    await svc.create(_SPEC)  # _SPEC has no ssh_credentials_ref
+    with pytest.raises(ValueError, match="no ssh_credentials_ref"):
+        await svc.get_ssh_context("mercury")

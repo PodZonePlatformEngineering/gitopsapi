@@ -22,6 +22,7 @@ dependencies = [
     "qdrant-client>=1.17.0",
     "starlette>=0.37.0",
     "sse-starlette>=2.1.0",
+    "paramiko>=3.4.0",
 ]
 
 [project.optional-dependencies]
@@ -37,3 +38,9 @@ where = ["src"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+]
