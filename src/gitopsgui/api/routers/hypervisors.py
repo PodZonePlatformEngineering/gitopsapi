@@ -52,6 +52,20 @@ async def update_hypervisor(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.post("/hypervisors/{name}/audit", response_model=HypervisorResponse, status_code=200)
+async def run_hypervisor_audit(
+    name: str,
+    _=require_role("cluster_operator"),
+):
+    svc = HypervisorService()
+    try:
+        return await svc.run_audit(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.delete("/hypervisors/{name}", status_code=204)
 async def delete_hypervisor(
     name: str,

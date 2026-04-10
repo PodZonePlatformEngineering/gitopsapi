@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import gitopsgui.services.hypervisor_service as hs_module
 from tests.conftest import CLUSTER_OP_HEADERS, BUILD_MGR_HEADERS, SENIOR_DEV_HEADERS
-from gitopsgui.models.hypervisor import HypervisorListResponse, HypervisorResponse
+from gitopsgui.models.hypervisor import HypervisorAuditData, HypervisorListResponse, HypervisorResponse
 
 _SPEC_PAYLOAD = {
     "name": "mercury",
@@ -163,4 +163,59 @@ def test_delete_hypervisor_missing_returns_404(client):
 
 def test_delete_hypervisor_build_manager_rejected(client):
     r = client.delete("/api/v1/hypervisors/mercury", headers=BUILD_MGR_HEADERS)
+    assert r.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/hypervisors/{name}/audit
+# ---------------------------------------------------------------------------
+
+_AUDIT_RESPONSE = HypervisorResponse(
+    name="mercury",
+    endpoint="https://192.168.4.52:8006/",
+    host_ip="192.168.4.52",
+    ssh_credentials_ref="mercury-root",
+    audit=HypervisorAuditData(
+        bridges=["vmbr0", "vmbr1"],
+        storage_pools=["zfs-pool-01", "ceph-pool-01"],
+        template_vms=["talos-v1.12.6"],
+        proxmox_nodes=["mercury"],
+        last_audited="2026-04-11T10:00:00Z",
+    ),
+)
+
+
+def test_run_audit_returns_200_with_audit_fields(client):
+    with patch(
+        "gitopsgui.api.routers.hypervisors.HypervisorService.run_audit",
+        new=AsyncMock(return_value=_AUDIT_RESPONSE),
+    ):
+        r = client.post("/api/v1/hypervisors/mercury/audit", headers=CLUSTER_OP_HEADERS)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["name"] == "mercury"
+    assert body["audit"]["bridges"] == ["vmbr0", "vmbr1"]
+    assert body["audit"]["last_audited"] == "2026-04-11T10:00:00Z"
+
+
+def test_run_audit_missing_hypervisor_returns_404(client):
+    with patch(
+        "gitopsgui.api.routers.hypervisors.HypervisorService.run_audit",
+        new=AsyncMock(side_effect=FileNotFoundError("not found")),
+    ):
+        r = client.post("/api/v1/hypervisors/ghost/audit", headers=CLUSTER_OP_HEADERS)
+    assert r.status_code == 404
+
+
+def test_run_audit_no_ssh_credentials_ref_returns_422(client):
+    with patch(
+        "gitopsgui.api.routers.hypervisors.HypervisorService.run_audit",
+        new=AsyncMock(side_effect=ValueError("no ssh_credentials_ref")),
+    ):
+        r = client.post("/api/v1/hypervisors/mercury/audit", headers=CLUSTER_OP_HEADERS)
+    assert r.status_code == 422
+
+
+def test_run_audit_build_manager_rejected(client):
+    r = client.post("/api/v1/hypervisors/mercury/audit", headers=BUILD_MGR_HEADERS)
     assert r.status_code == 403
