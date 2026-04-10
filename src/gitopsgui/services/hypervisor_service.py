@@ -6,7 +6,7 @@ from kubernetes import client as k8s_client  # type: ignore
 from kubernetes import config as k8s_config  # type: ignore
 from kubernetes.client.exceptions import ApiException  # type: ignore
 
-from ..models.hypervisor import HypervisorSpec, HypervisorResponse, HypervisorListResponse
+from ..models.hypervisor import HypervisorSpec, HypervisorResponse, HypervisorListResponse, HypervisorAuditData
 
 GITOPSAPI_NAMESPACE = os.environ.get("GITOPSAPI_NAMESPACE", "gitopsapi")
 _CONFIGMAP_NAME = "gitopsapi-hypervisors"
@@ -103,6 +103,36 @@ class HypervisorService:
             raise FileNotFoundError(f"Hypervisor {name!r} not found")
         del data[name]
         self._write(data)
+
+    async def run_audit(self, name: str) -> HypervisorResponse:
+        """Run Egg audit script on hypervisor, parse result, persist to HypervisorSpec.
+
+        Returns updated HypervisorResponse with populated audit field.
+        Raises FileNotFoundError if hypervisor not registered.
+        Raises ValueError if hypervisor has no ssh_credentials_ref.
+        """
+        from .egg_script_service import EggScriptService
+
+        hyp = await self.get(name)
+        if hyp is None:
+            raise FileNotFoundError(f"Hypervisor {name!r} not found")
+        if not hyp.ssh_credentials_ref:
+            raise ValueError(
+                f"Hypervisor {name!r} has no ssh_credentials_ref — cannot run audit"
+            )
+
+        raw = await EggScriptService().audit(name)
+
+        audit = HypervisorAuditData(
+            bridges=raw.get("bridges", []),
+            storage_pools=raw.get("storage_pools", []),
+            template_vms=raw.get("template_vms", []),
+            proxmox_nodes=raw.get("proxmox_nodes", []),
+            last_audited=raw.get("last_audited"),
+        )
+
+        updated_spec = hyp.model_copy(update={"audit": audit})
+        return await self.update(name, updated_spec)
 
     async def get_ssh_context(self, name: str) -> dict:
         """Return {'host_ip': ..., 'ssh_credentials_ref': ...} for a named hypervisor.
