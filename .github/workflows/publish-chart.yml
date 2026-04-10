@@ -1,0 +1,35 @@
+name: Publish Helm chart
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      chart_version:
+        description: "Chart version to publish (default: from Chart.yaml)"
+        required: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Log in to ghcr.io
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io \
+            --username ${{ github.actor }} \
+            --password-stdin
+
+      - name: Package and push chart
+        run: |
+          helm package charts/gitopsapi
+          helm push gitopsapi-*.tgz oci://ghcr.io/podzoneplatformengineering
