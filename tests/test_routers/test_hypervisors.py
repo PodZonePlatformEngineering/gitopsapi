@@ -7,7 +7,8 @@ from unittest.mock import AsyncMock, patch
 
 import gitopsgui.services.hypervisor_service as hs_module
 from tests.conftest import CLUSTER_OP_HEADERS, BUILD_MGR_HEADERS, SENIOR_DEV_HEADERS
-from gitopsgui.models.hypervisor import HypervisorAuditData, HypervisorListResponse, HypervisorResponse
+from gitopsgui.models.hypervisor import HypervisorAuditData, HypervisorListResponse, HypervisorResponse, BootstrapStatus
+from gitopsgui.services.egg_script_service import EggScriptError
 
 _SPEC_PAYLOAD = {
     "name": "mercury",
@@ -218,4 +219,87 @@ def test_run_audit_no_ssh_credentials_ref_returns_422(client):
 
 def test_run_audit_build_manager_rejected(client):
     r = client.post("/api/v1/hypervisors/mercury/audit", headers=BUILD_MGR_HEADERS)
+    assert r.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/hypervisors/{name}/bootstrap
+# ---------------------------------------------------------------------------
+
+_BOOTSTRAP_PAYLOAD = {
+    "cluster_name": "mercury-management",
+    "vip": "192.168.4.150",
+}
+
+_BOOTSTRAP_STATUS = BootstrapStatus(
+    hypervisor="mercury",
+    cluster_name="mercury-management",
+    status="complete",
+    steps_completed=["audit", "template", "provision", "download_kubeconfig", "platform_install"],
+    kubeconfig_secret_name="mercury-management-kubeconfig",
+)
+
+
+def test_bootstrap_hypervisor_returns_200(client):
+    with patch(
+        "gitopsgui.api.routers.hypervisors.HypervisorService.bootstrap",
+        new=AsyncMock(return_value=_BOOTSTRAP_STATUS),
+    ):
+        r = client.post(
+            "/api/v1/hypervisors/mercury/bootstrap",
+            json=_BOOTSTRAP_PAYLOAD,
+            headers=CLUSTER_OP_HEADERS,
+        )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "complete"
+    assert "audit" in body["steps_completed"]
+    assert body["kubeconfig_secret_name"] == "mercury-management-kubeconfig"
+
+
+def test_bootstrap_hypervisor_missing_returns_404(client):
+    with patch(
+        "gitopsgui.api.routers.hypervisors.HypervisorService.bootstrap",
+        new=AsyncMock(side_effect=FileNotFoundError("Hypervisor 'ghost' not found")),
+    ):
+        r = client.post(
+            "/api/v1/hypervisors/ghost/bootstrap",
+            json=_BOOTSTRAP_PAYLOAD,
+            headers=CLUSTER_OP_HEADERS,
+        )
+    assert r.status_code == 404
+
+
+def test_bootstrap_hypervisor_no_ssh_credentials_ref_returns_422(client):
+    with patch(
+        "gitopsgui.api.routers.hypervisors.HypervisorService.bootstrap",
+        new=AsyncMock(side_effect=ValueError("no ssh_credentials_ref")),
+    ):
+        r = client.post(
+            "/api/v1/hypervisors/mercury/bootstrap",
+            json=_BOOTSTRAP_PAYLOAD,
+            headers=CLUSTER_OP_HEADERS,
+        )
+    assert r.status_code == 422
+
+
+def test_bootstrap_hypervisor_egg_script_error_returns_500(client):
+    with patch(
+        "gitopsgui.api.routers.hypervisors.HypervisorService.bootstrap",
+        new=AsyncMock(side_effect=EggScriptError("egg-provision.sh exited 1: error")),
+    ):
+        r = client.post(
+            "/api/v1/hypervisors/mercury/bootstrap",
+            json=_BOOTSTRAP_PAYLOAD,
+            headers=CLUSTER_OP_HEADERS,
+        )
+    assert r.status_code == 500
+
+
+def test_bootstrap_hypervisor_build_manager_rejected(client):
+    r = client.post(
+        "/api/v1/hypervisors/mercury/bootstrap",
+        json=_BOOTSTRAP_PAYLOAD,
+        headers=BUILD_MGR_HEADERS,
+    )
     assert r.status_code == 403
