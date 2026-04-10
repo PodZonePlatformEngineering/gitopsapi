@@ -103,3 +103,16 @@ class HypervisorService:
             raise FileNotFoundError(f"Hypervisor {name!r} not found")
         del data[name]
         self._write(data)
+
+    async def get_ssh_context(self, name: str) -> dict:
+        """Return {'host_ip': ..., 'ssh_credentials_ref': ...} for a named hypervisor.
+
+        Raises FileNotFoundError if hypervisor not registered.
+        Raises ValueError if hypervisor has no ssh_credentials_ref set.
+        """
+        hyp = await self.get(name)
+        if hyp is None:
+            raise FileNotFoundError(f"Hypervisor {name!r} not found")
+        if not hyp.ssh_credentials_ref:
+            raise ValueError(f"Hypervisor {name!r} has no ssh_credentials_ref set")
+        return {"host_ip": hyp.host_ip, "ssh_credentials_ref": hyp.ssh_credentials_ref}
