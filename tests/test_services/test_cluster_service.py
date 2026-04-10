@@ -2427,10 +2427,10 @@ async def test_create_cluster_inline_manifest_ordering(monkeypatch, skip_k8s):
 import gitopsgui.services.cluster_service as cs
 
 
-def test_cluster_chart_version_default_is_0139():
-    """Default CLUSTER_CHART_VERSION must be 0.1.39 (type-approved baseline)."""
+def test_cluster_chart_version_default_is_0140():
+    """Default CLUSTER_CHART_VERSION must be 0.1.40 (CC-145 Cilium MVP baseline)."""
     # This reads the module-level constant directly; no monkeypatching needed.
-    assert cs.CLUSTER_CHART_VERSION == "0.1.39"
+    assert cs.CLUSTER_CHART_VERSION == "0.1.40"
 
 
 def test_cluster_chart_version_override_reflected_in_render(monkeypatch):
