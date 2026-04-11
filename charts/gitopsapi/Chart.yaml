@@ -2,5 +2,5 @@ apiVersion: v2
 name: gitopsapi
 description: GitOpsAPI — GitOps management API with React frontend (clusters, applications, change pipelines, PR governance)
 type: application
-version: 0.1.4
+version: 0.1.5
 appVersion: "v0.1.6"
