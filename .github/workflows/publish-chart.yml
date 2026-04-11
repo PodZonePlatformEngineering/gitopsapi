@@ -31,5 +31,6 @@ jobs:
 
       - name: Package and push chart
         run: |
+          CHART_VERSION=$(grep '^version:' charts/gitopsapi/Chart.yaml | awk '{print $2}')
           helm package charts/gitopsapi
-          helm push gitopsapi-*.tgz oci://ghcr.io/podzoneplatformengineering
+          helm push "gitopsapi-${CHART_VERSION}.tgz" oci://ghcr.io/podzoneplatformengineering
