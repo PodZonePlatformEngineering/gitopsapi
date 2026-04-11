@@ -38,6 +38,12 @@ spec:
               value: {{ .Values.gitops.githubOrg | quote }}
             - name: GITOPS_LOCAL_PATH
               value: {{ .Values.gitops.localPath | default "/tmp/gitops-repo" | quote }}
+            - name: GITOPS_CLUSTER_CHART_REPO_URL
+              value: {{ .Values.clusterChart.repoUrl | quote }}
+            - name: GITOPS_CLUSTER_CHART_VERSION
+              value: {{ .Values.clusterChart.version | quote }}
+            - name: GITOPSAPI_NAMESPACE
+              value: {{ .Values.instance.namespace | quote }}
             - name: GITHUB_TOKEN
               valueFrom:
                 secretKeyRef:
