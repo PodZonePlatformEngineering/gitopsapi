@@ -131,7 +131,7 @@ async def bootstrap_cluster(
 
 
 @router.post(
-    "/clusters/{name}/gateway",
+    "/clusters/{name}/ingress-connector",
     response_model=IngressConnectorResponse,
     status_code=202,
     summary="Wire cloudflared ingress connector for a cluster (CC-068)",
