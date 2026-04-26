@@ -83,7 +83,7 @@ async def embed(text: str) -> list[float]:
         if attempt:
             await asyncio.sleep(2 ** attempt)  # 2s, 4s, 8s, 16s
         try:
-            async with httpx.AsyncClient(timeout=60.0) as http:
+            async with httpx.AsyncClient(timeout=120.0) as http:
                 response = await http.post(
                     f"{OLLAMA_URL}/api/embed",
                     json={"model": OLLAMA_EMBED_MODEL, "input": text},
