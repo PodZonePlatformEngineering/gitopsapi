@@ -121,8 +121,8 @@ management cluster configuration.
 **Uniqueness:** One per organisation. May diverge between dev and ete instances if
 provider versions differ — controlled via `GITOPS_CLUSTER_CHART_VERSION`.
 
-**Source:** `/Users/martincolley/workspace/code/cluster-chart/` (chart source)
-Published to: `PodZonePlatformEngineering/cluster09` gh-pages branch.
+**Source:** `PodZonePlatformEngineering/cluster-chart` (chart source)
+Published via OCI CI/CD pipeline (`publish-chart.yml`); see repo CI for current registry URL.
 
 ---
 
